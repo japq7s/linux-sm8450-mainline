@@ -1,0 +1,832 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * realme GT Neo5 150W (senna, project 22624)
+ *
+ * Copyright (c) 2024, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024, Jens Reidel <adrian@travitia.xyz>
+ *
+ * Based on the senna-b device tree by Marohinmark
+ * (github.com/marohinmark/linux-sm8450, branch next). Values (regulators,
+ * GPIOs, reserved memory) were checked against the device tree of the
+ * running downstream kernel (/sys/firmware/fdt), not guessed. Structure
+ * follows sm8475-nothing-pong.dts.
+ */
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/input/linux-event-codes.h>
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+
+#include "sm8475.dtsi"
+#include "pm8350.dtsi"
+#include "pm8350b.dtsi"
+#include "pm8350c.dtsi"
+#include "pm8450.dtsi"
+#include "pmk8350.dtsi"
+#include "pmr735a.dtsi"
+
+/delete-node/ &adsp_mem;
+/delete-node/ &rmtfs_mem;
+/delete-node/ &slpi_mem;
+/delete-node/ &video_mem;
+
+/ {
+	model = "realme GT Neo5 150W";
+	compatible = "realme,senna-b", "qcom,sm8475";
+	chassis-type = "handset";
+
+	/*
+	 * Booted WITHOUT a valid dtbo: ABL then needs an exact board match
+	 * (platform_dt_absolute_match): MTP (0x08), version 1.0, subtype 0,
+	 * DDR bits 0 (RAM > 4 GB). Measured on Android: hw_platform=MTP,
+	 * platform_version=65536, platform_subtype_id=0, soc_id=530.
+	 * No qcom,pmic-id on purpose (ABL parses it in a different layout).
+	 */
+	qcom,msm-id = <0x212 0x10000>, <0x21c 0x10000>;
+	qcom,board-id = <0x10008 0>;
+
+	aliases {
+		hsuart0 = &uart20;
+	};
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		pinctrl-0 = <&key_vol_down_n>;
+		pinctrl-names = "default";
+
+		key-volume-down {
+			label = "Volume Down";
+			linux,code = <KEY_VOLUMEDOWN>;
+			gpios = <&pm8350_gpios 6 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
+			linux,can-disable;
+			wakeup-source;
+		};
+	};
+
+	/*
+	 * Battery/charger run on the ADSP (downstream qcom,pmic_glink with
+	 * qcom,battery_charger, qcom,ucsi and qcom,altmode). No USB-C
+	 * connector yet: USB stays in fixed peripheral mode for now.
+	 */
+	pmic-glink {
+		compatible = "qcom,sm8475-pmic-glink",
+			     "qcom,sm8450-pmic-glink",
+			     "qcom,pmic-glink";
+		#address-cells = <1>;
+		#size-cells = <0>;
+	};
+
+	/* Pixelworks Iris 5, powered from tlmm 182 ("qcom,iris-vdd-gpio") */
+	iris_vdd: regulator-iris-vdd {
+		compatible = "regulator-fixed";
+		regulator-name = "iris_vdd";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+
+		gpio = <&tlmm 182 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		/* downstream iris_power_on(): 5 ms after enabling vdd */
+		startup-delay-us = <5000>;
+		/* left on by the bootloader together with the panel */
+		regulator-boot-on;
+
+		pinctrl-0 = <&iris_vdd_default>;
+		pinctrl-names = "default";
+	};
+
+	/*
+	 * Touch controller 1.8 V: downstream "enable1v8_gpio" (tlmm 97, driven
+	 * high to enable) in front of vcc_1v8 = PM8450 L4.
+	 */
+	ts_vcc_1p8: regulator-ts-vcc {
+		compatible = "regulator-fixed";
+		regulator-name = "ts_vcc_1p8";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+
+		gpio = <&tlmm 97 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_l4h_1p8>;
+
+		pinctrl-0 = <&ts_vcc_en_default>;
+		pinctrl-names = "default";
+	};
+
+	reserved-memory {
+		ramoops@85200000 {
+			compatible = "ramoops";
+			reg = <0x0 0x85200000 0x0 0x400000>;
+
+			record-size = <0x200000>;
+			pmsg-size = <0x200000>;
+			console-size = <0x200000>;
+			no-map;
+		};
+
+		adsp_mem: memory@85700000 {
+			reg = <0x0 0x85700000 0x0 0x2800000>;
+			no-map;
+		};
+
+		/* starts 1 MiB lower than on sm8450.dtsi */
+		slpi_mem: memory@87f00000 {
+			reg = <0x0 0x87f00000 0x0 0x1a00000>;
+			no-map;
+		};
+
+		video_mem: memory@9fd00000 {
+			reg = <0x0 0x9fd00000 0x0 0x700000>;
+			no-map;
+		};
+
+		/* OPLUS device_info / bootloader log, kept as on downstream */
+		device_info_mem: memory@a4f00000 {
+			reg = <0x0 0xa4f00000 0x0 0x8000>;
+		};
+
+		bootloader_log_mem: memory@a7605000 {
+			reg = <0x0 0xa7605000 0x0 0x8000>;
+		};
+
+		splash_region@b8000000 {
+			reg = <0x0 0xb8000000 0x0 0x2b00000>;
+			no-map;
+		};
+
+		/* downstream allocates it dynamically; this is where it landed */
+		rmtfs_mem: memory@fd100000 {
+			compatible = "qcom,rmtfs-mem";
+			reg = <0x0 0xfd100000 0x0 0x280000>;
+			no-map;
+
+			qcom,client-id = <1>;
+			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
+		};
+	};
+
+	/*
+	 * QCA6490 (WCN6855 family) WLAN/BT, same wiring as on the Nothing
+	 * Phone (2). Values from the downstream cnss-qca6490/bt_qca6490 nodes:
+	 * wlan-en tlmm 80, bt-en tlmm 81, vdd-wlan-io S10B, -aon S2E, -dig
+	 * S11B, -rfa1 S1C, -rfa2 S12B; PCIe0, BT on QUP SE20 (uart20).
+	 */
+	wcn6855-pmu {
+		compatible = "qcom,wcn6855-pmu";
+
+		pinctrl-0 = <&bt_en_default>;
+		pinctrl-names = "default";
+
+		wlan-enable-gpios = <&tlmm 80 GPIO_ACTIVE_HIGH>;
+		bt-enable-gpios = <&tlmm 81 GPIO_ACTIVE_HIGH>;
+
+		vddio-supply = <&vreg_s10b_1p8>;
+		vddaon-supply = <&vreg_s2e_0p85>;
+		vddpmu-supply = <&vreg_s11b_0p95>;
+		vddrfa0p95-supply = <&vreg_s11b_0p95>;
+		vddrfa1p3-supply = <&vreg_s12b_1p25>;
+		vddrfa1p9-supply = <&vreg_s1c_1p88>;
+		vddpcie1p3-supply = <&vreg_s12b_1p25>;
+		vddpcie1p9-supply = <&vreg_s1c_1p88>;
+
+		regulators {
+			vreg_pmu_rfa_cmn_0p8: ldo0 {
+				regulator-name = "vreg_pmu_rfa_cmn_0p8";
+			};
+
+			vreg_pmu_aon_0p8: ldo1 {
+				regulator-name = "vreg_pmu_aon_0p8";
+			};
+
+			vreg_pmu_wlcx_0p8: ldo2 {
+				regulator-name = "vreg_pmu_wlcx_0p8";
+			};
+
+			vreg_pmu_wlmx_0p8: ldo3 {
+				regulator-name = "vreg_pmu_wlmx_0p8";
+			};
+
+			vreg_pmu_btcmx_0p8: ldo4 {
+				regulator-name = "vreg_pmu_btcmx_0p8";
+			};
+
+			vreg_pmu_pcie_1p8: ldo5 {
+				regulator-name = "vreg_pmu_pcie_1p8";
+			};
+
+			vreg_pmu_pcie_0p9: ldo6 {
+				regulator-name = "vreg_pmu_pcie_0p9";
+			};
+
+			vreg_pmu_rfa_0p8: ldo7 {
+				regulator-name = "vreg_pmu_rfa_0p8";
+			};
+
+			vreg_pmu_rfa_1p2: ldo8 {
+				regulator-name = "vreg_pmu_rfa_1p2";
+			};
+
+			vreg_pmu_rfa_1p7: ldo9 {
+				regulator-name = "vreg_pmu_rfa_1p7";
+			};
+		};
+	};
+
+	vph_pwr: vph-pwr-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vph_pwr";
+		regulator-min-microvolt = <3700000>;
+		regulator-max-microvolt = <3700000>;
+
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+/*
+ * Only regulators that have a consumer here (plus their parents) are
+ * described. Minimum voltages are the downstream qcom,init-voltage values:
+ * the regulator core votes the minimum at probe, exactly like downstream.
+ * PM8350B L1 (panel "extvdd", 1.2 V) has no mainline rpmh description; it
+ * stays as the bootloader left it.
+ */
+&apps_rsc {
+	regulators-0 {
+		compatible = "qcom,pm8350-rpmh-regulators";
+		qcom,pmic-id = "b";
+
+		vdd-s10-supply = <&vph_pwr>;
+		vdd-s11-supply = <&vph_pwr>;
+		vdd-s12-supply = <&vph_pwr>;
+
+		vdd-l2-l7-supply = <&vreg_bob>;
+		vdd-l3-l5-supply = <&vreg_s11b_0p95>;
+		vdd-l6-l9-l10-supply = <&vreg_s12b_1p25>;
+
+		vreg_s10b_1p8: smps10 {
+			regulator-name = "vreg_s10b_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+		};
+
+		vreg_s11b_0p95: smps11 {
+			regulator-name = "vreg_s11b_0p95";
+			regulator-min-microvolt = <952000>;
+			regulator-max-microvolt = <1170000>;
+		};
+
+		vreg_s12b_1p25: smps12 {
+			regulator-name = "vreg_s12b_1p25";
+			regulator-min-microvolt = <1256000>;
+			regulator-max-microvolt = <2040000>;
+		};
+
+		vreg_l2b_3p07: ldo2 {
+			regulator-name = "vreg_l2b_3p07";
+			regulator-min-microvolt = <3072000>;
+			regulator-max-microvolt = <3300000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l5b_0p88: ldo5 {
+			regulator-name = "vreg_l5b_0p88";
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <958000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l7b_2p5: ldo7 {
+			regulator-name = "vreg_l7b_2p5";
+			regulator-min-microvolt = <2504000>;
+			regulator-max-microvolt = <2504000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l9b_1p2: ldo9 {
+			regulator-name = "vreg_l9b_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1304000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+
+	regulators-1 {
+		compatible = "qcom,pm8350c-rpmh-regulators";
+		qcom,pmic-id = "c";
+
+		vdd-s1-supply = <&vph_pwr>;
+
+		vdd-l1-l12-supply = <&vreg_s1c_1p88>;
+		vdd-l3-l4-l5-l7-l13-supply = <&vreg_bob>;
+		vdd-l10-supply = <&vreg_s12b_1p25>;
+
+		vdd-bob-supply = <&vph_pwr>;
+
+		vreg_s1c_1p88: smps1 {
+			regulator-name = "vreg_s1c_1p88";
+			regulator-min-microvolt = <1880000>;
+			regulator-max-microvolt = <2024000>;
+		};
+
+		/* touch vdd_2v8; downstream vdd_2v8_volt = 3008000 */
+		vreg_l3c_3p0: ldo3 {
+			regulator-name = "vreg_l3c_3p0";
+			regulator-min-microvolt = <3008000>;
+			regulator-max-microvolt = <3008000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l10c_1p2: ldo10 {
+			regulator-name = "vreg_l10c_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1304000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* panel vddio, display only */
+		vreg_l12c_1p8: ldo12 {
+			regulator-name = "vreg_l12c_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* panel vci, display only; the panel needs 3.0 V */
+		vreg_l13c_3p0: ldo13 {
+			regulator-name = "vreg_l13c_3p0";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_bob: bob {
+			regulator-name = "vreg_bob";
+			regulator-min-microvolt = <3008000>;
+			regulator-max-microvolt = <3960000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_AUTO>;
+		};
+	};
+
+	regulators-2 {
+		compatible = "qcom,pm8450-rpmh-regulators";
+		qcom,pmic-id = "h";
+
+		vdd-l4-supply = <&vreg_bob>;
+
+		/* touch vcc_1v8 */
+		vreg_l4h_1p8: ldo4 {
+			regulator-name = "vreg_l4h_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+
+	regulators-3 {
+		compatible = "qcom,pmr735a-rpmh-regulators";
+		qcom,pmic-id = "e";
+
+		vdd-s2-supply = <&vph_pwr>;
+		vdd-l7-bob-supply = <&vreg_bob>;
+
+		/*
+		 * WLAN/BT aon. Always on so the chip is powered when the PCIe
+		 * link is trained, before the pwrseq module takes over.
+		 */
+		vreg_s2e_0p85: smps2 {
+			regulator-name = "vreg_s2e_0p85";
+			regulator-min-microvolt = <500000>;
+			regulator-max-microvolt = <1040000>;
+			regulator-always-on;
+		};
+
+		/*
+		 * WLAN/BT antenna switch (downstream wlan-ant-switch-supply,
+		 * bt-vdd-asd-supply, 2.8 V). No mainline consumer, keep it on.
+		 */
+		vreg_l7e_2p8: ldo7 {
+			regulator-name = "vreg_l7e_2p8";
+			regulator-min-microvolt = <2800000>;
+			regulator-max-microvolt = <2800000>;
+			regulator-always-on;
+		};
+	};
+};
+
+&gpi_dma0 {
+	status = "okay";
+};
+
+&gpi_dma1 {
+	status = "okay";
+};
+
+&gpu {
+	status = "okay";
+
+	zap-shader {
+		/*
+		 * Split image from the ROM vendor partition (/vendor/firmware),
+		 * the one kgsl loads (zap_name "a730_zap.mdt"). The a730_zap.mbn
+		 * there is a different build (last segment 3896 vs 3416 bytes),
+		 * PAS init returned -EINVAL for it.
+		 */
+		firmware-name = "qcom/sm8475/realme/senna/a730_zap.mdt";
+	};
+};
+
+&i2c14 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	/* downstream "eusb2_repeater_oplus@4f" */
+	eusb2_repeater: redriver@4f {
+		compatible = "nxp,eusb2-repeater";
+		reg = <0x4f>;
+
+		vdd18-supply = <&vreg_s10b_1p8>;
+		vdd3-supply = <&vreg_l2b_3p07>;
+
+		reset-gpio = <&pm8350c_gpios 7 GPIO_ACTIVE_HIGH>;
+		pinctrl-0 = <&eusb2_reset_default>;
+		pinctrl-names = "default";
+
+		qcom,param-override-seq = <0x63 0x08 0x00 0x07 0x43 0x06 0x03 0x0a>;
+		qcom,param-override-seq-host = <0x62 0x08 0x00 0x07 0x50 0x06 0x03 0x0a>;
+
+		#phy-cells = <0>;
+	};
+};
+
+&mdss {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&vreg_l10c_1p2>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "tianma,nt37705";
+		reg = <0>;
+
+		reset-gpios = <&tlmm 3 GPIO_ACTIVE_LOW>;
+
+		vddio-supply = <&vreg_l12c_1p8>;
+		vci-supply = <&vreg_l13c_3p0>;
+
+		/* Iris 5 sits between DSI and the panel, used in bypass */
+		iris-vdd-supply = <&iris_vdd>;
+		iris-reset-gpios = <&tlmm 44 GPIO_ACTIVE_LOW>;
+		iris-wakeup-gpios = <&tlmm 54 GPIO_ACTIVE_HIGH>;
+
+		pinctrl-0 = <&lcd_reset_n_active>, <&mdp_vsync_active>,
+			    <&iris_reset_active>, <&iris_wakeup_active>;
+		pinctrl-1 = <&lcd_reset_n_suspend>, <&mdp_vsync_suspend>,
+			    <&iris_reset_suspend>, <&iris_wakeup_suspend>;
+		pinctrl-names = "default", "sleep";
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	remote-endpoint = <&panel_in>;
+	data-lanes = <0 1 2 3>;
+};
+
+&mdss_dsi0_phy {
+	vdds-supply = <&vreg_l5b_0p88>;
+	status = "okay";
+};
+
+/*
+ * pwrseq-qcom-wcn takes wlan-enable GPIOD_ASIS and expects it to be high
+ * before the PCIe link is trained (driver FIXME). ABL leaves it low and the
+ * pwrseq module only probes seconds after link training, so drive it high
+ * from the controller's own pin state, applied before link training.
+ */
+&pcie0 {
+	pinctrl-0 = <&pcie0_default_state>, <&wlan_en_default>;
+	pinctrl-names = "default";
+
+	/*
+	 * sm8475.dtsi has perst-gpio ACTIVE_HIGH, which keeps the endpoint
+	 * in reset (measured: gpio94 out low after "deassert"). PERST# is
+	 * active low, as in sm8450.dtsi.
+	 */
+	/delete-property/ perst-gpio;
+	perst-gpios = <&tlmm 94 GPIO_ACTIVE_LOW>;
+
+	status = "okay";
+};
+
+&pcieport0 {
+	wifi@0 {
+		compatible = "pci17cb,1103";
+		reg = <0x10000 0x0 0x0 0x0 0x0>;
+
+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn_0p8>;
+		vddaon-supply = <&vreg_pmu_aon_0p8>;
+		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+		vddwlmx-supply = <&vreg_pmu_wlmx_0p8>;
+		vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
+		vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p7>;
+	};
+};
+
+/* downstream pcie0: vreg-0p9 L5B, vreg-1p2 L10C, perst tlmm 94, wake tlmm 96 */
+&pcie0_phy {
+	vdda-phy-supply = <&vreg_l5b_0p88>;
+	vdda-pll-supply = <&vreg_l10c_1p2>;
+	status = "okay";
+};
+
+&pm8350_gpios {
+	key_vol_down_n: key-vol-down-n-state {
+		pins = "gpio6";
+		function = PMIC_GPIO_FUNC_NORMAL;
+		bias-pull-up;
+		input-enable;
+		power-source = <1>;
+	};
+};
+
+&pm8350c_gpios {
+	eusb2_reset_default: eusb2-reset-default-state {
+		pins = "gpio7";
+		function = PMIC_GPIO_FUNC_NORMAL;
+		input-enable;
+		output-enable;
+		bias-disable;
+		power-source = <1>;
+		qcom,drive-strength = <PMIC_GPIO_STRENGTH_MED>;
+	};
+};
+
+&pon_pwrkey {
+	status = "okay";
+};
+
+/* on senna RESIN is Volume Up (downstream linux,code = <115>) */
+&pon_resin {
+	linux,code = <KEY_VOLUMEUP>;
+	status = "okay";
+};
+
+&qupv3_id_0 {
+	status = "okay";
+};
+
+&qupv3_id_1 {
+	status = "okay";
+};
+
+&qupv3_id_2 {
+	status = "okay";
+};
+
+&gpi_dma2 {
+	status = "okay";
+};
+
+/* Split images from the modem partition (/vendor/firmware_mnt/image) */
+&remoteproc_adsp {
+	firmware-name = "qcom/sm8475/realme/senna/adsp.mdt";
+	status = "okay";
+};
+
+&remoteproc_cdsp {
+	firmware-name = "qcom/sm8475/realme/senna/cdsp.mdt";
+	/*
+	 * Without a DDR vote the CDSP never signals ready once interconnect
+	 * sync_state dropped the boot votes (qxm_nsp at 0, start timed out).
+	 * Downstream votes "rproc_ddr" (CDSP_PROC -> EBI1); sm8550.dtsi has
+	 * the same property in the SoC dtsi.
+	 */
+	interconnects = <&nsp_noc MASTER_CDSP_PROC QCOM_ICC_TAG_ALWAYS
+			 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
+	status = "okay";
+};
+
+&remoteproc_mpss {
+	firmware-name = "qcom/sm8475/realme/senna/modem.mdt";
+	status = "okay";
+};
+
+&remoteproc_slpi {
+	firmware-name = "qcom/sm8475/realme/senna/slpi.mdt";
+	status = "okay";
+};
+
+/*
+ * IPA 5.1: SoC node from the upstream "SM8450 IPA support" v2 series.
+ * GSI firmware is loaded by the AP into ipa_gsi_mem, as downstream does
+ * (ipa_hw memory-regions, pas-id 15).
+ */
+&ipa {
+	qcom,gsi-loader = "self";
+	memory-region = <&ipa_gsi_mem>;
+	firmware-name = "qcom/sm8475/realme/senna/ipa_fws.mdt";
+	status = "okay";
+};
+
+/* downstream qupv3_se4_spi: synaptics_tcm@0, compatible "synaptics-s3910" */
+&spi4 {
+	status = "okay";
+
+	touchscreen@0 {
+		compatible = "syna,s3910";
+		reg = <0>;
+		spi-max-frequency = <12000000>;
+
+		interrupts-extended = <&tlmm 21 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&tlmm 20 GPIO_ACTIVE_LOW>;
+
+		vdd-supply = <&vreg_l3c_3p0>;
+		vcc-supply = <&ts_vcc_1p8>;
+
+		pinctrl-0 = <&ts_int_default>, <&ts_reset_default>;
+		pinctrl-names = "default";
+	};
+};
+
+&tlmm {
+	/* qcom,gpios-reserved in the downstream tree */
+	gpio-reserved-ranges = <28 4>, <36 4>;
+
+	lcd_reset_n_active: lcd-reset-n-active-state {
+		pins = "gpio3";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	lcd_reset_n_suspend: lcd-reset-n-suspend-state {
+		pins = "gpio3";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	iris_reset_active: iris-reset-active-state {
+		pins = "gpio44";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	iris_reset_suspend: iris-reset-suspend-state {
+		pins = "gpio44";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	iris_wakeup_active: iris-wakeup-active-state {
+		pins = "gpio54";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	iris_wakeup_suspend: iris-wakeup-suspend-state {
+		pins = "gpio54";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	mdp_vsync_active: mdp-vsync-active-state {
+		pins = "gpio86";
+		function = "mdp_vsync";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	mdp_vsync_suspend: mdp-vsync-suspend-state {
+		pins = "gpio86";
+		function = "mdp_vsync";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	iris_vdd_default: iris-vdd-default-state {
+		pins = "gpio182";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-up;
+	};
+
+	ts_reset_default: ts-reset-default-state {
+		pins = "gpio20";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	ts_int_default: ts-int-default-state {
+		pins = "gpio21";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
+	/* downstream cnss_wlan_en_active */
+	wlan_en_default: wlan-en-default-state {
+		pins = "gpio80";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-pull-up;
+		output-high;
+	};
+
+	bt_en_default: bt-en-default-state {
+		pins = "gpio81";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	ts_vcc_en_default: ts-vcc-en-default-state {
+		pins = "gpio97";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+&uart20 {
+	status = "okay";
+
+	bluetooth {
+		compatible = "qcom,wcn6855-bt";
+
+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn_0p8>;
+		vddaon-supply = <&vreg_pmu_aon_0p8>;
+		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+		vddwlmx-supply = <&vreg_pmu_wlmx_0p8>;
+		vddbtcmx-supply = <&vreg_pmu_btcmx_0p8>;
+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p7>;
+
+		max-speed = <3200000>;
+	};
+};
+
+&ufs_mem_hc {
+	reset-gpios = <&tlmm 210 GPIO_ACTIVE_LOW>;
+
+	vcc-supply = <&vreg_l7b_2p5>;
+	vcc-max-microamp = <1100000>;
+	vccq-supply = <&vreg_l9b_1p2>;
+	vccq-max-microamp = <1200000>;
+
+	status = "okay";
+};
+
+&ufs_mem_phy {
+	vdda-phy-supply = <&vreg_l5b_0p88>;
+	vdda-pll-supply = <&vreg_l10c_1p2>;
+
+	status = "okay";
+};
+
+/*
+ * USB 2.0 only. No role switching yet (pmic-glink has no USB-C connector
+ * here): fixed peripheral mode, enough for USB networking.
+ */
+&usb_1 {
+	qcom,select-utmi-as-pipe-clk;
+	dr_mode = "peripheral";
+	maximum-speed = "high-speed";
+	phys = <&usb_1_hsphy>;
+	phy-names = "usb2-phy";
+	status = "okay";
+};
+
+&usb_1_hsphy {
+	vdd-supply = <&vreg_l5b_0p88>;
+	vdda12-supply = <&vreg_l10c_1p2>;
+
+	phys = <&eusb2_repeater>;
+
+	status = "okay";
+};
