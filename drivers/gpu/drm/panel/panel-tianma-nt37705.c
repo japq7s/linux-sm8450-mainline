@@ -8,6 +8,7 @@
 #include <linux/backlight.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
+#include <linux/irqflags.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/regulator/consumer.h>
@@ -27,18 +28,116 @@ struct tianma_nt37705 {
 	struct drm_dsc_config dsc;
 	struct gpio_desc *reset_gpio;
 	struct regulator_bulk_data *supplies;
+
+	/*
+	 * Optional Pixelworks Iris 5 between the DSI host and the panel
+	 * (realme GT Neo5). It is kept in analog bypass, where it only needs
+	 * power, a reset pulse and one "power down sys" one-wire command.
+	 */
+	struct regulator *iris_vdd;
+	struct gpio_desc *iris_reset_gpio;
+	struct gpio_desc *iris_wakeup_gpio;
+
+	/* PWM dimming mode last sent: 0 low, 1 high, -1 unknown (after reset) */
+	int pwm_mode;
 };
 
+/* Enabled in this order, 1 ms apart (downstream qcom,supply-post-on-sleep) */
 static const struct regulator_bulk_data tianma_nt37705_supplies[] = {
-	{ .supply = "vdd2p8" },
-	{ .supply = "vdd3p3" },
 	{ .supply = "vddio" },
+	{ .supply = "vdd" },
+	{ .supply = "vci" },
 };
 
 static inline
 struct tianma_nt37705 *to_tianma_nt37705(struct drm_panel *panel)
 {
 	return container_of(panel, struct tianma_nt37705, panel);
+}
+
+static int tianma_nt37705_power_on(struct tianma_nt37705 *ctx)
+{
+	int i, ret;
+
+	if (ctx->iris_vdd) {
+		ret = regulator_enable(ctx->iris_vdd);
+		if (ret)
+			return ret;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(tianma_nt37705_supplies); i++) {
+		ret = regulator_enable(ctx->supplies[i].consumer);
+		if (ret)
+			goto err;
+		usleep_range(1000, 1500);
+	}
+
+	return 0;
+
+err:
+	while (--i >= 0)
+		regulator_disable(ctx->supplies[i].consumer);
+	if (ctx->iris_vdd)
+		regulator_disable(ctx->iris_vdd);
+	return ret;
+}
+
+static void tianma_nt37705_power_off(struct tianma_nt37705 *ctx)
+{
+	int i;
+
+	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
+	gpiod_set_value_cansleep(ctx->iris_reset_gpio, 1);
+
+	if (ctx->iris_vdd)
+		regulator_disable(ctx->iris_vdd);
+
+	for (i = ARRAY_SIZE(tianma_nt37705_supplies) - 1; i >= 0; i--)
+		regulator_disable(ctx->supplies[i].consumer);
+}
+
+/* Downstream iris_reset_chip(): low for 1 ms, then 2 ms before use */
+static void tianma_nt37705_iris_reset(struct tianma_nt37705 *ctx)
+{
+	if (!ctx->iris_reset_gpio)
+		return;
+
+	gpiod_set_value_cansleep(ctx->iris_reset_gpio, 1);
+	usleep_range(1000, 1100);
+	gpiod_set_value_cansleep(ctx->iris_reset_gpio, 0);
+	usleep_range(2000, 2100);
+}
+
+/*
+ * Downstream iris_send_one_wired_cmd(IRIS_POWER_DOWN_SYS): four pulses of
+ * 56 us high / 56 us low on the wakeup GPIO. After a reset the chip is in
+ * analog bypass; this powers down its digital part and leaves the DSI
+ * lanes passed through to the panel ("Enter abyp done" downstream).
+ */
+#define IRIS_ONE_WIRE_PULSE_US		56
+#define IRIS_ONE_WIRE_CMD_DELAY_US	10
+#define IRIS_ONE_WIRE_START_END_US	227
+#define IRIS_POWER_DOWN_SYS_PULSES	4
+
+static void tianma_nt37705_iris_bypass(struct tianma_nt37705 *ctx)
+{
+	unsigned long flags;
+	int i;
+
+	if (!ctx->iris_wakeup_gpio)
+		return;
+
+	local_irq_save(flags);
+	for (i = 0; i < IRIS_POWER_DOWN_SYS_PULSES; i++) {
+		gpiod_set_value(ctx->iris_wakeup_gpio, 1);
+		udelay(IRIS_ONE_WIRE_PULSE_US);
+		gpiod_set_value(ctx->iris_wakeup_gpio, 0);
+		udelay(IRIS_ONE_WIRE_PULSE_US);
+	}
+	udelay(IRIS_ONE_WIRE_CMD_DELAY_US);
+	local_irq_restore(flags);
+
+	udelay(IRIS_ONE_WIRE_START_END_US);
 }
 
 static void tianma_nt37705_reset(struct tianma_nt37705 *ctx)
@@ -219,20 +318,22 @@ static int tianma_nt37705_prepare(struct drm_panel *panel)
 	struct drm_dsc_picture_parameter_set pps;
 	int ret;
 
-	ret = regulator_bulk_enable(ARRAY_SIZE(tianma_nt37705_supplies),
-				    ctx->supplies);
+	ret = tianma_nt37705_power_on(ctx);
 	if (ret < 0)
 		return ret;
 
+	/* The reset drops the PWM mode, resend it with the next brightness */
+	ctx->pwm_mode = -1;
+
+	/* Same order as downstream dsi_panel_reset(): Iris, then the panel */
+	tianma_nt37705_iris_reset(ctx);
 	tianma_nt37705_reset(ctx);
+	tianma_nt37705_iris_bypass(ctx);
 
 	ret = tianma_nt37705_on(ctx);
 	if (ret < 0) {
 		dev_err(dev, "Failed to initialize panel: %d\n", ret);
-		gpiod_set_value_cansleep(ctx->reset_gpio, 1);
-		regulator_bulk_disable(ARRAY_SIZE(tianma_nt37705_supplies),
-				       ctx->supplies);
-		return ret;
+		goto err_power_off;
 	}
 
 	drm_dsc_pps_payload_pack(&pps, &ctx->dsc);
@@ -240,22 +341,22 @@ static int tianma_nt37705_prepare(struct drm_panel *panel)
 	ret = mipi_dsi_picture_parameter_set(ctx->dsi, &pps);
 	if (ret < 0) {
 		dev_err(panel->dev, "failed to transmit PPS: %d\n", ret);
-		regulator_bulk_disable(ARRAY_SIZE(tianma_nt37705_supplies),
-				       ctx->supplies);
-		return ret;
+		goto err_power_off;
 	}
 
 	ret = mipi_dsi_compression_mode(ctx->dsi, true);
 	if (ret < 0) {
 		dev_err(dev, "failed to enable compression mode: %d\n", ret);
-		regulator_bulk_disable(ARRAY_SIZE(tianma_nt37705_supplies),
-				       ctx->supplies);
-		return ret;
+		goto err_power_off;
 	}
 
 	msleep(28);
 
 	return 0;
+
+err_power_off:
+	tianma_nt37705_power_off(ctx);
+	return ret;
 }
 
 static int tianma_nt37705_unprepare(struct drm_panel *panel)
@@ -268,9 +369,7 @@ static int tianma_nt37705_unprepare(struct drm_panel *panel)
 	if (ret < 0)
 		dev_err(dev, "Failed to un-initialize panel: %d\n", ret);
 
-	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
-	regulator_bulk_disable(ARRAY_SIZE(tianma_nt37705_supplies),
-			       ctx->supplies);
+	tianma_nt37705_power_off(ctx);
 
 	return 0;
 }
@@ -302,13 +401,79 @@ static const struct drm_panel_funcs tianma_nt37705_panel_funcs = {
 	.get_modes = tianma_nt37705_get_modes,
 };
 
+/*
+ * The panel has two PWM dimming modes. Above this level it must be put in
+ * the "high" mode, otherwise blacks are visibly raised (measured on senna:
+ * fine at 1600, washed out at 2048). Threshold and register sets are
+ * oplus,pwm-switch-backlight-threshold and qcom,mdss-dsi-pwm-switch-{high,low}
+ * -command from the vendor device tree; both sets are identical apart from
+ * the B2 values.
+ */
+#define TIANMA_NT37705_PWM_SWITCH_LEVEL	1603
+
+static void tianma_nt37705_pwm_switch(struct mipi_dsi_multi_context *dsi_ctx,
+				      bool high)
+{
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xf0, 0x55, 0xaa, 0x52, 0x08, 0x00);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x6f, 0x11);
+	if (high)
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb2, 0x02, 0x03, 0x42);
+	else
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb2, 0x0f, 0x17, 0x4e);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb3,
+				     0x00, 0x08, 0x00, 0xb4, 0x00, 0xb4, 0x01,
+				     0x5f, 0x01, 0x5f, 0x02, 0x20, 0x02, 0x20,
+				     0x03, 0x7c, 0x03, 0x7c, 0x05, 0x30, 0x05,
+				     0x30, 0x06, 0x43, 0x06, 0x43, 0x06, 0x44,
+				     0x06, 0x44, 0x09, 0x0b, 0x09, 0x0b, 0x0d,
+				     0xbb, 0x0d, 0xbb, 0x0f, 0xff, 0x0f, 0xff,
+				     0x0f, 0xff);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb4,
+				     0x00, 0x00, 0x00, 0x80, 0x00, 0x96, 0x00,
+				     0x96, 0x00, 0xc0, 0x00, 0xc0, 0x01, 0x26,
+				     0x01, 0x26, 0x02, 0x8e, 0x02, 0x8e, 0x05,
+				     0x8e, 0x05, 0x8e, 0x08, 0x26, 0x08, 0x26,
+				     0x09, 0x40, 0x09, 0x40, 0x09, 0x40, 0x09,
+				     0x40, 0x09, 0x40, 0x09, 0x40, 0x09, 0x40,
+				     0x09, 0x40, 0x09, 0x40);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x6f, 0x2e);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb4,
+				     0x00, 0x00, 0x00, 0xe2, 0x00, 0xff, 0x00,
+				     0xff, 0x01, 0x3a, 0x01, 0x3a, 0x01, 0xce,
+				     0x01, 0xce, 0x03, 0xaa, 0x03, 0xaa, 0x07,
+				     0x9c, 0x07, 0x9c, 0x0b, 0x20, 0x0b, 0x20,
+				     0x0c, 0x56, 0x0c, 0x56, 0x0c, 0x56, 0x0c,
+				     0x56, 0x0c, 0x56, 0x0c, 0x56, 0x0c, 0x56,
+				     0x0c, 0x56, 0x0c, 0x56);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x6f, 0x5c);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb4,
+				     0x00, 0x00, 0x00, 0x78, 0x00, 0x8c, 0x00,
+				     0x8c, 0x00, 0xb4, 0x00, 0xb4, 0x01, 0x26,
+				     0x01, 0x26, 0x02, 0x8e, 0x02, 0x8e, 0x05,
+				     0x8e, 0x05, 0x8e, 0x08, 0x26, 0x08, 0x26,
+				     0x09, 0x40, 0x09, 0x40, 0x09, 0x40, 0x09,
+				     0x40, 0x09, 0x40, 0x09, 0x40, 0x09, 0x40,
+				     0x09, 0x40, 0x09, 0x40);
+}
+
 static int tianma_nt37705_bl_update_status(struct backlight_device *bl)
 {
 	struct mipi_dsi_device *dsi = bl_get_data(bl);
+	struct tianma_nt37705 *ctx = mipi_dsi_get_drvdata(dsi);
+	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
 	u16 brightness = backlight_get_brightness(bl);
+	int mode = brightness > TIANMA_NT37705_PWM_SWITCH_LEVEL;
 	int ret;
 
 	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+
+	/* Only on a change: the set is ~200 bytes */
+	if (ctx->pwm_mode != mode) {
+		tianma_nt37705_pwm_switch(&dsi_ctx, mode);
+		if (dsi_ctx.accum_err)
+			return dsi_ctx.accum_err;
+		ctx->pwm_mode = mode;
+	}
 
 	ret = mipi_dsi_dcs_set_display_brightness_large(dsi, brightness);
 	if (ret < 0)
@@ -379,7 +544,29 @@ static int tianma_nt37705_probe(struct mipi_dsi_device *dsi)
 		return dev_err_probe(dev, PTR_ERR(ctx->reset_gpio),
 				     "Failed to get reset-gpios\n");
 
+	ctx->iris_vdd = devm_regulator_get_optional(dev, "iris-vdd");
+	if (IS_ERR(ctx->iris_vdd)) {
+		if (PTR_ERR(ctx->iris_vdd) != -ENODEV)
+			return dev_err_probe(dev, PTR_ERR(ctx->iris_vdd),
+					     "Failed to get iris-vdd\n");
+		ctx->iris_vdd = NULL;
+	}
+
+	/* Left running by the bootloader: request deasserted / idle */
+	ctx->iris_reset_gpio = devm_gpiod_get_optional(dev, "iris-reset",
+						       GPIOD_OUT_LOW);
+	if (IS_ERR(ctx->iris_reset_gpio))
+		return dev_err_probe(dev, PTR_ERR(ctx->iris_reset_gpio),
+				     "Failed to get iris-reset-gpios\n");
+
+	ctx->iris_wakeup_gpio = devm_gpiod_get_optional(dev, "iris-wakeup",
+							GPIOD_OUT_LOW);
+	if (IS_ERR(ctx->iris_wakeup_gpio))
+		return dev_err_probe(dev, PTR_ERR(ctx->iris_wakeup_gpio),
+				     "Failed to get iris-wakeup-gpios\n");
+
 	ctx->dsi = dsi;
+	ctx->pwm_mode = -1;
 	mipi_dsi_set_drvdata(dsi, ctx);
 
 	dsi->lanes = 4;
@@ -414,6 +601,14 @@ static int tianma_nt37705_probe(struct mipi_dsi_device *dsi)
 	ctx->dsc.bits_per_component = 10;
 	ctx->dsc.bits_per_pixel = 8 << 4; /* 4 fractional bits */
 	ctx->dsc.block_pred_enable = true;
+	/*
+	 * The panel decoder is configured for DSC 1.1 SCR (vendor register
+	 * 0x91 in the on sequence: initial_dec_delay 645, scale_increment
+	 * 271, nfl_bpg_offset 2793, slice_bpg_offset 1887, final_offset
+	 * 4336), which needs first_line_bpg_offset = 15. The pre-SCR
+	 * default (12) gives 567/307/2235 and a garbled, washed-out image.
+	 */
+	ctx->dsc.first_line_bpg_offset = 15;
 
 	ret = devm_mipi_dsi_attach(dev, dsi);
 	if (ret < 0) {
