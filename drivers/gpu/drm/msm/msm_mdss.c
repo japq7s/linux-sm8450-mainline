@@ -13,6 +13,7 @@
 #include <linux/irqchip/chained_irq.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
 
@@ -466,6 +467,44 @@ static const struct dev_pm_ops mdss_pm_ops = {
 	SET_RUNTIME_PM_OPS(mdss_runtime_suspend, mdss_runtime_resume, NULL)
 };
 
+/*
+ * The core BCR reset in msm_mdss_init() does not clear all of the state the
+ * bootloader leaves behind: on the realme GT Neo5 (SM8475, NT37705 panel
+ * behind a Pixelworks Iris 5) the panel never answers the first enable,
+ * while every enable that follows a power collapse of the MDSS GDSC works.
+ *
+ * Power-collapse the MDSS once, before the children are populated, so the
+ * first enable starts from the same state as the later ones. genpd keeps a
+ * domain that was on at boot powered until its provider's sync_state, so
+ * that hold has to be dropped explicitly. The provider (dispcc) only feeds
+ * the display, whose sole consumer is this device.
+ *
+ * The 100 ms off time is the shortest disable/enable cycle measured to
+ * work (blank/unblank); a shorter one has not been tried.
+ */
+static void msm_mdss_boot_power_collapse(struct msm_mdss *mdss)
+{
+	struct device *dev = mdss->dev;
+	struct of_phandle_args pd_args;
+	int ret;
+
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret) {
+		dev_warn(dev, "boot power collapse skipped: %d\n", ret);
+		return;
+	}
+	pm_runtime_put_sync(dev);
+
+	if (of_parse_phandle_with_args(dev->of_node, "power-domains",
+				       "#power-domain-cells", 0, &pd_args))
+		return;
+
+	of_genpd_sync_state(pd_args.np);
+	of_node_put(pd_args.np);
+
+	msleep(100);
+}
+
 static int mdss_probe(struct platform_device *pdev)
 {
 	struct msm_mdss *mdss;
@@ -478,6 +517,9 @@ static int mdss_probe(struct platform_device *pdev)
 		return PTR_ERR(mdss);
 
 	platform_set_drvdata(pdev, mdss);
+
+	if (!is_mdp5)
+		msm_mdss_boot_power_collapse(mdss);
 
 	/*
 	 * MDP5/DPU based devices don't have a flat hierarchy. There is a top
