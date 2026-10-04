@@ -527,6 +527,19 @@ config TOUCHSCREEN_IPROC
 	  To compile this driver as a module, choose M here: the
 	  module will be called bcm_iproc_tsc.
 
+config TOUCHSCREEN_SYNAPTICS_TCM_SPI
+	tristate "Synaptics TouchComm SPI touchscreen"
+	depends on SPI
+	help
+	  Say Y here if you have a Synaptics TouchComm (TCM) touch controller
+	  attached over SPI, such as the S3910 found in the realme GT Neo5.
+
+	  Only controllers that boot into application mode out of their own
+	  flash are supported.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called synaptics_tcm_spi.
+
 config TOUCHSCREEN_S6SY761
 	tristate "Samsung S6SY761 Touchscreen driver"
 	depends on I2C
