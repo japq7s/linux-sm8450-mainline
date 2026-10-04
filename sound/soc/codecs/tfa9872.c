@@ -6,9 +6,12 @@
  */
 
 #include <linux/bitfield.h>
+#include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
+#include <linux/regulator/consumer.h>
 #include <sound/soc.h>
 
 #define TFA987X_SYS_CTRL0		0x00
@@ -216,12 +219,96 @@ static bool tfa987x_setup_dcdc(struct device *dev, struct regmap *rmap, u16 rev)
 	return true;
 }
 
+struct tfa987x_reg_seq {
+	u8 reg;
+	u16 val;
+};
+
+/*
+ * Factory settings per revision, written after a reset. Generated code from
+ * the NXP tfa98xx driver (tfa9874_specific(), tfa_init.c).
+ */
+static const struct tfa987x_reg_seq tfa9874_n1a_init[] = {	/* 0x0a74, V25 */
+	{ 0x02, 0x22a8 }, { 0x51, 0x0020 }, { 0x52, 0x57dc }, { 0x58, 0x16a4 },
+	{ 0x61, 0x0110 }, { 0x66, 0x0701 }, { 0x6f, 0x00a3 }, { 0x70, 0x07f8 },
+	{ 0x73, 0x0007 }, { 0x74, 0x5068 }, { 0x75, 0x0d28 }, { 0x83, 0x0594 },
+	{ 0x84, 0x0001 }, { 0x85, 0x0001 }, { 0x88, 0x0000 }, { 0xc4, 0x2001 },
+};
+
+static const struct tfa987x_reg_seq tfa9874_n1b_init[] = {	/* 0x0b74, V1.6 */
+	{ 0x02, 0x22a8 }, { 0x51, 0x0020 }, { 0x52, 0x57dc }, { 0x58, 0x16a4 },
+	{ 0x61, 0x0110 }, { 0x66, 0x0701 }, { 0x6f, 0x00a3 }, { 0x70, 0x07f8 },
+	{ 0x73, 0x0047 }, { 0x74, 0x5068 }, { 0x75, 0x0d28 }, { 0x83, 0x0595 },
+	{ 0x84, 0x0001 }, { 0x85, 0x0001 }, { 0x88, 0x0000 }, { 0xc4, 0x2001 },
+};
+
+static const struct tfa987x_reg_seq tfa9874_n1c_init[] = {	/* 0x0c74 */
+	{ 0x02, 0x22c8 }, { 0x52, 0x57dc }, { 0x53, 0x003e }, { 0x56, 0x0400 },
+	{ 0x61, 0x0110 }, { 0x6f, 0x00a5 }, { 0x70, 0x07f8 }, { 0x73, 0x0047 },
+	{ 0x74, 0x5098 }, { 0x75, 0x8d28 }, { 0x80, 0x0000 }, { 0x83, 0x0799 },
+	{ 0x84, 0x0081 },
+};
+
+static void tfa9874_init(struct regmap *rmap, unsigned int rev)
+{
+	const struct tfa987x_reg_seq *seq;
+	unsigned int val;
+	int i, n;
+
+	switch (rev) {
+	case 0x0a74:
+		seq = tfa9874_n1a_init;
+		n = ARRAY_SIZE(tfa9874_n1a_init);
+		break;
+	case 0x0b74:
+		seq = tfa9874_n1b_init;
+		n = ARRAY_SIZE(tfa9874_n1b_init);
+		break;
+	case 0x0c74:
+		seq = tfa9874_n1c_init;
+		n = ARRAY_SIZE(tfa9874_n1c_init);
+		break;
+	default:
+		return;
+	}
+
+	/* Unlock key 1 and 2, as tfa9874_specific() + tfa98xx_key2(tfa, 0) */
+	regmap_write(rmap, 0x0f, 0x5a6b);
+	regmap_read(rmap, 0xfb, &val);
+	regmap_write(rmap, 0xa0, val ^ 0x005a);
+	regmap_write(rmap, 0x0f, 0x5a6b);
+	regmap_update_bits(rmap, 0xa1, 0xff, 0x5a);
+	regmap_write(rmap, 0x0f, 0);
+
+	for (i = 0; i < n; i++)
+		regmap_write(rmap, seq[i].reg, seq[i].val);
+}
+
 static int tfa987x_i2c_probe(struct i2c_client *i2c)
 {
 	struct device *dev = &i2c->dev;
+	struct gpio_desc *reset;
 	struct regmap *rmap;
 	unsigned int rev;
+	u32 slot = 0;
 	int ret;
+
+	ret = devm_regulator_get_enable_optional(dev, "vdd");
+	if (ret && ret != -ENODEV)
+		return dev_err_probe(dev, ret, "Failed to enable vdd\n");
+
+	/* Optional external reset (active high): pulse it, as NXP does */
+	reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+	if (IS_ERR(reset))
+		return dev_err_probe(dev, PTR_ERR(reset), "Failed to get reset\n");
+	if (reset) {
+		usleep_range(5000, 6000);
+		gpiod_set_value_cansleep(reset, 0);
+		usleep_range(5000, 6000);
+	}
+
+	/* TDM/I2S slot this amplifier plays (0 = left, 1 = right) */
+	of_property_read_u32(dev->of_node, "nxp,tdm-slot", &slot);
 
 	rmap = devm_regmap_init_i2c(i2c, &tfa987x_regmap_config);
 	if (IS_ERR(rmap))
@@ -238,6 +325,8 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 		case 0x1b72:
 		case 0x2b72:
 		case 0x3b72:
+		case 0x0a74:
+		case 0x0b74:
 		case 0x0c74:
 			dev_info(dev, "Chip revision: 0x%04x\n", rev);
 			break;
@@ -248,6 +337,9 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 
 	/* Perform soft reset */
 	regmap_write(rmap, TFA987X_SYS_CTRL0, TFA987X_SYS_CTRL0_I2CR_MSK);
+
+	if ((rev & 0xff) == 0x74)
+		tfa9874_init(rmap, rev);
 
 	/* Setup DC-DC Converter if we have configuration */
 	regmap_update_bits(rmap, TFA987X_SYS_CTRL0, TFA987X_SYS_CTRL0_DCDC_MSK,
@@ -280,7 +372,7 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 				 TFA987X_TDM_CFG3_SPKE_MSK);
 	regmap_update_bits(rmap, TFA987X_TDM_CFG6,
 				 TFA987X_TDM_CFG6_SPKS_MSK,
-				 FIELD_PREP(TFA987X_TDM_CFG6_SPKS_MSK, 0));
+				 FIELD_PREP(TFA987X_TDM_CFG6_SPKS_MSK, slot));
 
 	if ((rev & 0xff) == 0x72)
 		regmap_update_bits(rmap, TFA987X_MODE1_DET1,
