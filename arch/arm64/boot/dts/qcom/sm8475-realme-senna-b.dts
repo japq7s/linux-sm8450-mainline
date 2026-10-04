@@ -86,6 +86,31 @@
 		#size-cells = <0>;
 	};
 
+	/* Speakers: 2x TFA9874 on tertiary MI2S (downstream rx-lines 0x2 = SD1) */
+	sound {
+		compatible = "qcom,sm8450-sndcard";
+		model = "SM8475-realme-senna";
+
+		pinctrl-0 = <&tert_mi2s_active>;
+		pinctrl-names = "default";
+
+		speaker-dai-link {
+			link-name = "Speaker Playback";
+
+			cpu {
+				sound-dai = <&q6apmbedai TERTIARY_MI2S_RX>;
+			};
+
+			codec {
+				sound-dai = <&spk_amp_l>, <&spk_amp_r>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+	};
+
 	/* Pixelworks Iris 5, powered from tlmm 182 ("qcom,iris-vdd-gpio") */
 	iris_vdd: regulator-iris-vdd {
 		compatible = "regulator-fixed";
@@ -829,4 +854,75 @@
 	phys = <&eusb2_repeater>;
 
 	status = "okay";
+};
+
+&i2c13 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	/* TFA9874, reset active high (NXP: 1, 5 ms, 0), supply S10B */
+	/* slot 0 / left channel = top earpiece, slot 1 / right = bottom loudspeaker (measured) */
+	spk_amp_l: amplifier@34 {
+		compatible = "nxp,tfa9874";
+		reg = <0x34>;
+		reset-gpios = <&tlmm 50 GPIO_ACTIVE_HIGH>;
+		vdd-supply = <&vreg_s10b_1p8>;
+		nxp,tdm-slot = <0>;
+		sound-name-prefix = "Speaker Left";
+		#sound-dai-cells = <0>;
+	};
+
+	spk_amp_r: amplifier@35 {
+		compatible = "nxp,tfa9874";
+		reg = <0x35>;
+		reset-gpios = <&tlmm 51 GPIO_ACTIVE_HIGH>;
+		vdd-supply = <&vreg_s10b_1p8>;
+		nxp,tdm-slot = <1>;
+		sound-name-prefix = "Speaker Right";
+		#sound-dai-cells = <0>;
+	};
+};
+
+&q6apmbedai {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dai@TERTIARY_MI2S_RX {
+		reg = <TERTIARY_MI2S_RX>;
+		clocks = <&q6prmcc LPASS_CLK_ID_TER_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "bclk";
+	};
+};
+
+&tlmm {
+	/* downstream tert_mi2s_{sck,sd0,ws,sd1}_active */
+	tert_mi2s_active: tert-mi2s-active-state {
+		sck-pins {
+			pins = "gpio121";
+			function = "mi2s2_sck";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		data0-pins {
+			pins = "gpio122";
+			function = "mi2s2_data0";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		ws-pins {
+			pins = "gpio123";
+			function = "mi2s2_ws";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		data1-pins {
+			pins = "gpio124";
+			function = "mi2s2_data1";
+			drive-strength = <8>;
+			bias-pull-down;
+		};
+	};
 };
