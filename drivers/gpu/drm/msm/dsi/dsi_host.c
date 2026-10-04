@@ -1877,6 +1877,13 @@ static int dsi_host_parse_lane_data(struct msm_dsi_host *msm_host,
 
 static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc_config *dsc)
 {
+	/*
+	 * A panel driver may preset first_line_bpg_offset to ask for the
+	 * DSC 1.1 SCR parameter set (the decoder in some panels is
+	 * programmed with it, e.g. 15 for 1.1 SCR in the downstream
+	 * sde_dsc_helper). SCR uses the same RC tables as DSC 1.2 RGB 444.
+	 */
+	u8 first_line_bpg_offset = dsc->first_line_bpg_offset;
 	int ret;
 
 	if (dsc->bits_per_pixel & 0xf) {
@@ -1908,12 +1915,15 @@ static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc
 	drm_dsc_set_const_params(dsc);
 	drm_dsc_set_rc_buf_thresh(dsc);
 
-	/* DPU supports only pre-SCR panels */
-	ret = drm_dsc_setup_rc_params(dsc, DRM_DSC_1_1_PRE_SCR);
+	ret = drm_dsc_setup_rc_params(dsc, first_line_bpg_offset ?
+				      DRM_DSC_1_2_444 : DRM_DSC_1_1_PRE_SCR);
 	if (ret) {
 		DRM_DEV_ERROR(&msm_host->pdev->dev, "could not find DSC RC parameters\n");
 		return ret;
 	}
+
+	if (first_line_bpg_offset)
+		dsc->first_line_bpg_offset = first_line_bpg_offset;
 
 	dsc->initial_scale_value = drm_dsc_initial_scale_value(dsc);
 	dsc->line_buf_depth = dsc->bits_per_component + 1;
