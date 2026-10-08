@@ -90,6 +90,15 @@
 	sound {
 		compatible = "qcom,sm8450-sndcard";
 		model = "SM8475-realme-senna";
+		/* mic bias assignment from the 5.10 qcom,audio-routing (AMIC5 on bias 3) */
+		audio-routing = "AMIC1", "MIC BIAS1",
+				"AMIC2", "MIC BIAS2",
+				"AMIC4", "MIC BIAS4",
+				"AMIC5", "MIC BIAS3",
+				"TX SWR_INPUT0", "ADC1_OUTPUT",
+				"TX SWR_INPUT1", "ADC2_OUTPUT",
+				"TX SWR_INPUT0", "ADC3_OUTPUT",
+				"TX SWR_INPUT1", "ADC4_OUTPUT";
 
 		pinctrl-0 = <&tert_mi2s_active>;
 		pinctrl-names = "default";
