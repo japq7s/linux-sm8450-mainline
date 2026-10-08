@@ -109,6 +109,55 @@
 				sound-dai = <&q6apm>;
 			};
 		};
+
+		mic-dai-link {
+			link-name = "WCD Capture";
+
+			cpu {
+				sound-dai = <&q6apmbedai TX_CODEC_DMA_TX_3>;
+			};
+
+			codec {
+				sound-dai = <&wcd938x 1>, <&swr2 0>, <&txmacro 0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+	};
+
+	/*
+	 * WCD9385: analog microphones only (speakers/earpiece are the TFA9874s).
+	 * Values from the 5.10 DT (senna-live.dtb, wcd938x-codec): micbias1-3
+	 * 2.7 V, micbias4 1.8 V, rx/tx/io/buck from pm8350 s10, mic bias from bob,
+	 * reset on tlmm 43.
+	 */
+	wcd938x: audio-codec {
+		compatible = "qcom,wcd9385-codec";
+
+		pinctrl-0 = <&wcd_default>;
+		pinctrl-names = "default";
+
+		qcom,micbias1-microvolt = <2700000>;
+		qcom,micbias2-microvolt = <2700000>;
+		qcom,micbias3-microvolt = <2700000>;
+		qcom,micbias4-microvolt = <1800000>;
+		/* no 3.5 mm jack on senna; HDK values only to satisfy the parser */
+		qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000 237000 500000 500000 500000 500000 500000>;
+		qcom,mbhc-headset-vthreshold-microvolt = <1700000>;
+		qcom,mbhc-headphone-vthreshold-microvolt = <50000>;
+		qcom,rx-device = <&wcd_rx>;
+		qcom,tx-device = <&wcd_tx>;
+
+		reset-gpios = <&tlmm 43 GPIO_ACTIVE_LOW>;
+
+		vdd-buck-supply = <&vreg_s10b_1p8>;
+		vdd-rxtx-supply = <&vreg_s10b_1p8>;
+		vdd-io-supply = <&vreg_s10b_1p8>;
+		vdd-mic-bias-supply = <&vreg_bob>;
+
+		#sound-dai-cells = <1>;
 	};
 
 	/* Pixelworks Iris 5, powered from tlmm 182 ("qcom,iris-vdd-gpio") */
@@ -894,7 +943,44 @@
 	};
 };
 
+/* WCD9385 slaves: same SoundWire layout as sm8450-hdk / downstream waipio */
+&swr1 {
+	status = "okay";
+
+	wcd_rx: codec@0,4 {
+		compatible = "sdw20217010d00";
+		reg = <0 4>;
+		qcom,rx-port-mapping = <1 2 3 4 5>;
+	};
+};
+
+&swr2 {
+	status = "okay";
+
+	wcd_tx: codec@0,3 {
+		compatible = "sdw20217010d00";
+		reg = <0 3>;
+		qcom,tx-port-mapping = <1 1 2 3>;
+	};
+};
+
+/* provides the fsgen clock rx/tx macros need; no DMICs on senna */
+&vamacro {
+	vdd-micb-supply = <&vreg_s10b_1p8>;
+	qcom,dmic-sample-rate = <600000>;
+
+	status = "okay";
+};
+
 &tlmm {
+	wcd_default: wcd-reset-n-active-state {
+		pins = "gpio43";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-disable;
+		output-low;
+	};
+
 	/* downstream tert_mi2s_{sck,sd0,ws,sd1}_active */
 	tert_mi2s_active: tert-mi2s-active-state {
 		sck-pins {
