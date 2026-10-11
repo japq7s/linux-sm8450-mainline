@@ -102,13 +102,23 @@ static int tfa987x_digital_mute(struct snd_soc_dai *codec_dai, int mute, int str
 	return 0;
 }
 
+/*
+ * "<prefix> Amp Switch": lets userspace power down one amplifier of a pair
+ * sharing the same I2S link, e.g. the loudspeaker during an earpiece call.
+ * Virtual and inverted, so it defaults to on.
+ */
+static const struct snd_kcontrol_new tfa987x_amp_switch =
+	SOC_DAPM_SINGLE("Switch", SND_SOC_NOPM, 0, 1, 1);
+
 static const struct snd_soc_dapm_widget tfa987x_dapm_widgets[] = {
 	SND_SOC_DAPM_OUTPUT("Speaker"),
+	SND_SOC_DAPM_SWITCH("Amp", SND_SOC_NOPM, 0, 0, &tfa987x_amp_switch),
 	SND_SOC_DAPM_OUT_DRV_E("PWUP", TFA987X_SYS_CTRL0, 0, 1, NULL, 0, NULL, 0),
 };
 
 static const struct snd_soc_dapm_route tfa987x_dapm_routes[] = {
-	{"PWUP", NULL, "HiFi Playback"},
+	{"Amp", "Switch", "HiFi Playback"},
+	{"PWUP", NULL, "Amp"},
 	{"Speaker", NULL, "PWUP"},
 };
 
