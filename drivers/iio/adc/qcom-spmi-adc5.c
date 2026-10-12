@@ -744,6 +744,21 @@ static int adc5_get_fw_channel_data(struct adc5_chip *adc,
 		prop->avg_samples = VADC_DEF_AVG_SAMPLES;
 	}
 
+	/*
+	 * As in the downstream msm-5.10 driver: allow devicetree to override
+	 * the scaling function of the built-in channel table.
+	 *
+	 * OPLUS wires three thermistors (USB connector, its supplementary
+	 * sensor and the sub-board) to ADC7_GPIO{1,2,4}_100K_PU and requests
+	 * SCALE_HW_CALIB_DEFAULT, i.e. the voltage in uV, because the charger
+	 * driver applies its own NTC table. The table entry returns millidegrees
+	 * instead, which the charger misreads as ~117 C and powers the phone off.
+	 */
+	prop->scale_fn_type = -EINVAL;
+	ret = fwnode_property_read_u32(fwnode, "qcom,scale-fn-type", &value);
+	if (!ret && value < SCALE_HW_CALIB_INVALID)
+		prop->scale_fn_type = value;
+
 	if (fwnode_property_read_bool(fwnode, "qcom,ratiometric"))
 		prop->cal_method = ADC5_RATIOMETRIC_CAL;
 	else
@@ -852,8 +867,10 @@ static int adc5_get_fw_data(struct adc5_chip *adc)
 		if (ret)
 			return ret;
 
-		prop.scale_fn_type =
-			adc->data->adc_chans[prop.channel].scale_fn_type;
+		/* the table entry is only a default, see "qcom,scale-fn-type" */
+		if (prop.scale_fn_type == -EINVAL)
+			prop.scale_fn_type =
+				adc->data->adc_chans[prop.channel].scale_fn_type;
 		*chan_props = prop;
 		adc_chan = &adc->data->adc_chans[prop.channel];
 
