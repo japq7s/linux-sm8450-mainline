@@ -11,6 +11,7 @@
 
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/media-bus-format.h>
 
 #include "camss.h"
 #include "camss-vfe.h"
@@ -18,6 +19,17 @@
 
 /* Register offsets, named as in the IFE register map */
 #define IFE_TOP_CORE_CFG_0                                       0x00024
+#define IFE_DEMUX_BLS_MODULE_CFG                                 0x03b60
+#define		IFE_DEMUX_BLS_PERIOD(n)				((n) << 20)
+#define IFE_DEMUX_BLS_EVEN_CFG                                   0x03b68
+#define IFE_DEMUX_BLS_ODD_CFG                                    0x03b6c
+#define IFE_DEMUX_BLS_GAIN_CFG_0                                 0x03b70
+#define IFE_DEMUX_BLS_GAIN_CFG_1                                 0x03b74
+#define IFE_DEMUX_BLS_SUB_G_EVEN                                 0x03b78
+#define IFE_DEMUX_BLS_SUB_G_ODD                                  0x03b7c
+#define IFE_DEMUX_BLS_SUB_B                                      0x03b80
+#define IFE_DEMUX_BLS_SUB_R                                      0x03b84
+#define		IFE_DEMUX_BLS_SUB(v)				((v) << 20)
 #define IFE_WB_GAIN_MODULE_CFG                                   0x04560
 #define IFE_WB_GAIN_WB_CFG_0                                     0x04568
 #define IFE_WB_GAIN_WB_CFG_1                                     0x0456c
@@ -311,6 +323,55 @@ static void vfe_setup_chroma_downscale_nv12(struct vfe_device *vfe, u32 w, u32 h
 	writel_relaxed(0x00000000, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_H_PHASE_CFG);
 	writel_relaxed(0xc0400000, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_V_CFG);
 	writel_relaxed(0x00000000, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_V_PHASE_CFG);
+}
+
+/* 12 bit black level subtracted ahead of demosaic, 42 at 10 bit */
+#define IFE_780_BLACK_LEVEL	168
+
+/* Demux + BLS: CFA order from the sink format, black level subtracted */
+static void vfe_setup_demux_bls(struct vfe_device *vfe, u32 code)
+{
+	u32 even, odd, gain, bl = IFE_780_BLACK_LEVEL;
+
+	switch (code) {
+	case MEDIA_BUS_FMT_SRGGB8_1X8:
+	case MEDIA_BUS_FMT_SRGGB10_1X10:
+	case MEDIA_BUS_FMT_SRGGB12_1X12:
+	case MEDIA_BUS_FMT_SRGGB14_1X14:
+		even = 0xc9;
+		odd = 0xac;
+		break;
+	case MEDIA_BUS_FMT_SGBRG8_1X8:
+	case MEDIA_BUS_FMT_SGBRG10_1X10:
+	case MEDIA_BUS_FMT_SGBRG12_1X12:
+	case MEDIA_BUS_FMT_SGBRG14_1X14:
+		even = 0xca;
+		odd = 0x9c;
+		break;
+	case MEDIA_BUS_FMT_SBGGR8_1X8:
+	case MEDIA_BUS_FMT_SBGGR10_1X10:
+	case MEDIA_BUS_FMT_SBGGR12_1X12:
+	case MEDIA_BUS_FMT_SBGGR14_1X14:
+		even = 0xac;
+		odd = 0xc9;
+		break;
+	default:
+		even = 0x9c;
+		odd = 0xca;
+		break;
+	}
+
+	gain = DIV_ROUND_CLOSEST(0x400 * 4095, 4095 - bl);
+
+	writel_relaxed(even, vfe->base + IFE_DEMUX_BLS_EVEN_CFG);
+	writel_relaxed(odd, vfe->base + IFE_DEMUX_BLS_ODD_CFG);
+	writel_relaxed(gain << 16 | gain, vfe->base + IFE_DEMUX_BLS_GAIN_CFG_0);
+	writel_relaxed(gain << 16 | gain, vfe->base + IFE_DEMUX_BLS_GAIN_CFG_1);
+	writel_relaxed(IFE_DEMUX_BLS_SUB(bl), vfe->base + IFE_DEMUX_BLS_SUB_G_EVEN);
+	writel_relaxed(IFE_DEMUX_BLS_SUB(bl), vfe->base + IFE_DEMUX_BLS_SUB_G_ODD);
+	writel_relaxed(IFE_DEMUX_BLS_SUB(bl), vfe->base + IFE_DEMUX_BLS_SUB_B);
+	writel_relaxed(IFE_DEMUX_BLS_SUB(bl), vfe->base + IFE_DEMUX_BLS_SUB_R);
+	writel_relaxed(IFE_DEMUX_BLS_PERIOD(1) | 1, vfe->base + IFE_DEMUX_BLS_MODULE_CFG);
 }
 
 /* IFE 880: Q10 gain of 4.0 */
@@ -617,9 +678,11 @@ static void vfe_setup_ds16(struct vfe_device *vfe, u32 w, u32 h)
 
 /* Called from vfe_line_prepare() for NV12, ahead of the write masters and the IPP reg update */
 void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
-			      u32 w, u32 h)
+			      u32 w, u32 h, u32 code)
 {
 	vfe_setup_core_config(vfe);
+	if (desc->demux_bls)
+		vfe_setup_demux_bls(vfe, code);
 	vfe_setup_chroma_downscale_nv12(vfe, w, h);
 	vfe_setup_demosaic(vfe, desc);
 	vfe_setup_color_correction(vfe);
