@@ -6,6 +6,9 @@
 #include <linux/acpi.h>
 #include <linux/adreno-smmu-priv.h>
 #include <linux/delay.h>
+#include <linux/mm.h>
+#include <linux/slab.h>
+#include <dt-bindings/firmware/qcom,scm.h>
 #include <linux/of_device.h>
 #include <linux/firmware/qcom/qcom_scm.h>
 #include <linux/platform_device.h>
@@ -33,6 +36,8 @@
 #define GFX_ACTLR_PRR          (1 << 5)
 
 static const struct of_device_id qcom_smmu_actlr_client_of_match[] = {
+	{ .compatible = "qcom,sm8450-iris-secure-arp",
+		.data = (const void *)(PREFETCH_SHALLOW | CPRE | CMTLB) },
 	{ .compatible = "qcom,adreno",
 			.data = (const void *) (PREFETCH_DEEP | CPRE | CMTLB) },
 	{ .compatible = "qcom,adreno-gmu",
@@ -430,6 +435,115 @@ static const struct of_device_id qcom_smmu_client_of_match[] __maybe_unused = {
 	{ }
 };
 
+
+/*
+ * Secure video streams use ordinary S1 translations, but the hypervisor must
+ * also grant CP_NON_PIXEL read access to their page tables. Retain all table
+ * allocations until the context is disabled: io-pgtable free can be atomic,
+ * while SCM ownership changes may sleep. Bound retention per domain.
+ */
+#define QCOM_SECURE_PT_MAX 64
+struct qcom_secure_pt {
+	struct list_head list;
+	void *pages;
+	size_t size;
+	u64 owners;
+};
+static bool qcom_secure_pt_disabled;
+static LIST_HEAD(qcom_secure_pt_quarantine);
+static DEFINE_SPINLOCK(qcom_secure_pt_quarantine_lock);
+
+static void qcom_secure_pt_quarantine_add(struct qcom_secure_pt *pt)
+{
+	unsigned long flags;
+	phys_addr_t phys = virt_to_phys(pt->pages);
+
+	WRITE_ONCE(qcom_secure_pt_disabled, true);
+	pr_err("arm-smmu: retaining protected table %pa size %zu owners %#llx\n",
+	       &phys, pt->size, pt->owners);
+	spin_lock_irqsave(&qcom_secure_pt_quarantine_lock, flags);
+	list_add_tail(&pt->list, &qcom_secure_pt_quarantine);
+	spin_unlock_irqrestore(&qcom_secure_pt_quarantine_lock, flags);
+}
+
+static void *qcom_secure_pt_alloc(void *cookie, size_t size, gfp_t gfp)
+{
+	struct arm_smmu_domain *domain = cookie;
+	struct qcom_scm_vmperm perms[] = {
+		{ QCOM_SCM_VMID_HLOS, QCOM_SCM_PERM_RW },
+		{ domain->secure_vmid, QCOM_SCM_PERM_READ },
+	};
+	struct qcom_secure_pt *pt;
+	unsigned long flags;
+	int ret;
+
+	/* The private ARP domain maps from process context with GFP_KERNEL. */
+	if (READ_ONCE(qcom_secure_pt_disabled) || READ_ONCE(domain->secure_faulted) ||
+	    !gfpflags_allow_blocking(gfp))
+		return NULL;
+	spin_lock_irqsave(&domain->secure_pt_lock, flags);
+	if (domain->secure_pt_count == QCOM_SECURE_PT_MAX) {
+		spin_unlock_irqrestore(&domain->secure_pt_lock, flags);
+		return NULL;
+	}
+	domain->secure_pt_count++;
+	spin_unlock_irqrestore(&domain->secure_pt_lock, flags);
+	pt = kzalloc(sizeof(*pt), gfp);
+	if (!pt)
+		goto uncount;
+	pt->size = PAGE_ALIGN(size);
+	pt->pages = alloc_pages_exact(pt->size, gfp | __GFP_ZERO);
+	if (!pt->pages) {
+		kfree(pt);
+		goto uncount;
+	}
+	pt->owners = BIT_ULL(QCOM_SCM_VMID_HLOS);
+	ret = qcom_scm_assign_mem(virt_to_phys(pt->pages), pt->size,
+				  &pt->owners, perms, ARRAY_SIZE(perms));
+	if (ret) {
+		/* A failed permission transition must not return pages to buddy. */
+		WRITE_ONCE(domain->secure_faulted, true);
+		qcom_secure_pt_quarantine_add(pt);
+		return NULL;
+	}
+	spin_lock_irqsave(&domain->secure_pt_lock, flags);
+	list_add_tail(&pt->list, &domain->secure_pt_pages);
+	spin_unlock_irqrestore(&domain->secure_pt_lock, flags);
+	return pt->pages;
+uncount:
+	spin_lock_irqsave(&domain->secure_pt_lock, flags);
+	domain->secure_pt_count--;
+	spin_unlock_irqrestore(&domain->secure_pt_lock, flags);
+	return NULL;
+}
+
+static void qcom_secure_pt_free(void *cookie, void *pages, size_t size)
+{
+	/* Retired tables remain owned by the domain until destroy_context. */
+}
+
+static void qcom_smmu_destroy_context(struct arm_smmu_domain *domain)
+{
+	struct qcom_scm_vmperm hlos = { QCOM_SCM_VMID_HLOS, QCOM_SCM_PERM_RWX };
+	struct qcom_secure_pt *pt, *next;
+
+	if (!domain->secure_vmid)
+		return;
+	/* Called only after CB disable/page-table teardown or failed setup. */
+	list_for_each_entry_safe(pt, next, &domain->secure_pt_pages, list) {
+		list_del(&pt->list);
+		if (qcom_scm_assign_mem(virt_to_phys(pt->pages), pt->size,
+					&pt->owners, &hlos, 1)) {
+			qcom_secure_pt_quarantine_add(pt);
+			continue;
+		}
+		free_pages_exact(pt->pages, pt->size);
+		kfree(pt);
+	}
+	domain->secure_vmid = 0;
+	domain->secure_pt_count = 0;
+}
+
 static int qcom_smmu_init_context(struct arm_smmu_domain *smmu_domain,
 		struct io_pgtable_cfg *pgtbl_cfg, struct device *dev)
 {
@@ -445,6 +559,23 @@ static int qcom_smmu_init_context(struct arm_smmu_domain *smmu_domain,
 	if (client_match)
 		qcom_smmu_set_actlr_dev(dev, smmu, cbndx, client_match);
 
+	if (of_device_is_compatible(dev->of_node, "qcom,sm8450-iris-secure-arp")) {
+		u32 vmid;
+
+		if (of_property_read_u32(dev->of_node, "qcom,iommu-vmid", &vmid) ||
+		    vmid != QCOM_SCM_VMID_CP_NON_PIXEL ||
+		    smmu_domain->stage != ARM_SMMU_DOMAIN_S1)
+			return -EINVAL;
+		if (READ_ONCE(qcom_secure_pt_disabled))
+			return -EIO;
+		if (!qcom_scm_is_available())
+			return -EPROBE_DEFER;
+		INIT_LIST_HEAD(&smmu_domain->secure_pt_pages);
+		spin_lock_init(&smmu_domain->secure_pt_lock);
+		smmu_domain->secure_vmid = vmid;
+		pgtbl_cfg->alloc = qcom_secure_pt_alloc;
+		pgtbl_cfg->free = qcom_secure_pt_free;
+	}
 	return 0;
 }
 
@@ -610,6 +741,7 @@ static int qcom_sdm845_smmu500_reset(struct arm_smmu_device *smmu)
 
 static const struct arm_smmu_impl qcom_smmu_v2_impl = {
 	.init_context = qcom_smmu_init_context,
+	.destroy_context = qcom_smmu_destroy_context,
 	.cfg_probe = qcom_smmu_cfg_probe,
 	.def_domain_type = qcom_smmu_def_domain_type,
 	.write_s2cr = qcom_smmu_write_s2cr,
@@ -618,6 +750,7 @@ static const struct arm_smmu_impl qcom_smmu_v2_impl = {
 
 static const struct arm_smmu_impl qcom_smmu_500_impl = {
 	.init_context = qcom_smmu_init_context,
+	.destroy_context = qcom_smmu_destroy_context,
 	.cfg_probe = qcom_smmu_cfg_probe,
 	.def_domain_type = qcom_smmu_def_domain_type,
 	.reset = arm_mmu500_reset,
@@ -631,6 +764,7 @@ static const struct arm_smmu_impl qcom_smmu_500_impl = {
 
 static const struct arm_smmu_impl sdm845_smmu_500_impl = {
 	.init_context = qcom_smmu_init_context,
+	.destroy_context = qcom_smmu_destroy_context,
 	.cfg_probe = qcom_smmu_cfg_probe,
 	.def_domain_type = qcom_smmu_def_domain_type,
 	.reset = qcom_sdm845_smmu500_reset,
