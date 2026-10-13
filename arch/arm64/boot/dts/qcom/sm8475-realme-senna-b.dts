@@ -1036,6 +1036,10 @@
 	};
 };
 
+&pmk8350_rtc {
+	status = "okay";
+};
+
 &pmk8350_vadc {
 	/*
 	 * Charger NTCs. qcom,scale-fn-type 5 (SCALE_HW_CALIB_DEFAULT): the
