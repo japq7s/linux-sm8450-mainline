@@ -21,6 +21,8 @@
 #include "iris_platform_x1p42100.h"
 
 static const struct iris_firmware_desc iris_vpu20_p4_gen2_desc = {
+	.enc_dpb_per_buffer = true,
+	.enc_secure_arp = true,
 	.firmware_data = &iris_hfi_gen2_data,
 	.get_vpu_buffer_size = iris_vpu_buf_size,
 	.fwname = "qcom/vpu/vpu20_4v.mbn",
@@ -169,12 +171,6 @@ const struct iris_platform_data sm8450_data = {
 	.tz_cp_config_data = tz_cp_config_vpu3,
 	.tz_cp_config_data_size = ARRAY_SIZE(tz_cp_config_vpu3),
 	.resume_without_payload = true,
-	/*
-	 * The SM8450 encoder accesses its ARP buffer through a secure stream
-	 * and needs it owned by CP_NON_PIXEL; an ordinary buffer makes the
-	 * first encode session reset the SoC.
-	 */
-	.no_encoder = true,
 	.num_vpp_pipe = 4,
 	.max_session_count = 16,
 	.max_core_mbpf = ((8192 * 4320) / 256) * 2,
