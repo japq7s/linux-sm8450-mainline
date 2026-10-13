@@ -247,7 +247,8 @@ static void vfe_line_prepare(struct vfe_line *line)
 	struct vfe_device *vfe = to_vfe(line);
 
 	if (line->is_pix && pix->pixelformat == V4L2_PIX_FMT_NV12)
-		vfe_880_setup_pixel_pipe(vfe, vfe_pp_desc(vfe), pix->width, pix->height);
+		vfe_880_setup_pixel_pipe(vfe, vfe_pp_desc(vfe), pix->width, pix->height,
+					 line->fmt[MSM_VFE_PAD_SINK].code);
 }
 
 static const struct camss_video_ops vfe_video_ops_780 = {
