@@ -1412,8 +1412,16 @@
 	clock-frequency = <400000>;
 	status = "okay";
 
-	/* TFA9874, reset active high (NXP: 1, 5 ms, 0), supply S10B */
-	/* slot 0 / left channel = top earpiece, slot 1 / right = bottom loudspeaker (measured) */
+	/*
+	 * TFA9873 N1B (revision 0x0b73), reset active high (NXP: 1, 5 ms, 0),
+	 * supply S10B.
+	 * slot 0 / left channel = top earpiece, slot 1 / right = bottom
+	 * loudspeaker (measured).
+	 * Tuning: the bitfields of the stock tuning container
+	 * (odm/firmware/tfa98xx.cnt, "Realme 9873N1B"), device lists and the
+	 * "speaker"/"receiver" profiles. The TDM fields are left out: they
+	 * describe the 32 bit, current sensing link of the stock firmware.
+	 */
 	spk_amp_l: amplifier@34 {
 		compatible = "nxp,tfa9874";
 		reg = <0x34>;
@@ -1422,6 +1430,19 @@
 		nxp,tdm-slot = <0>;
 		sound-name-prefix = "Speaker Left";
 		#sound-dai-cells = <0>;
+
+		/* ENCURCOMP, OCP reference scaling (amp, boost), adaptive
+		 * boost trip levels, 2nd boost voltage, max coil current,
+		 * boost slope */
+		nxp,init-bitfields = <0x6f50 0x0>, <0x54a1 0x3>, <0x7371 0x3>,
+				     <0x7444 0xb>, <0x7584 0x10>, <0x7695 0x2e>,
+				     <0x7003 0x8>, <0x71c1 0x1>;
+		/* DCA, LNMODE, INPLEV, TDMSPKG, PWMFREQ */
+		nxp,speaker-bitfields = <0x0040 0x1>, <0x62e1 0x0>, <0x0240 0x0>,
+					<0x5f63 0x6>, <0x5900 0x1>;
+		/* earpiece: no boost, low noise mode, attenuated input */
+		nxp,receiver-bitfields = <0x0040 0x0>, <0x62e1 0x3>, <0x0240 0x1>,
+					 <0x5f63 0xf>, <0x5900 0x0>;
 	};
 
 	spk_amp_r: amplifier@35 {
@@ -1432,6 +1453,12 @@
 		nxp,tdm-slot = <1>;
 		sound-name-prefix = "Speaker Right";
 		#sound-dai-cells = <0>;
+
+		nxp,init-bitfields = <0x6f50 0x0>, <0x54a1 0x3>, <0x7371 0x3>,
+				     <0x7444 0xb>, <0x7584 0x10>, <0x7695 0x2e>,
+				     <0x7003 0xa>, <0x71c1 0x1>;
+		nxp,speaker-bitfields = <0x0040 0x1>, <0x62e1 0x0>, <0x0240 0x0>,
+					<0x5f63 0x6>, <0x5900 0x1>;
 	};
 };
 
