@@ -24,6 +24,7 @@ properties:
           - const: qcom,sm8550-iris
       - enum:
           - qcom,qcs8300-iris
+          - qcom,sm8450-iris
           - qcom,sm8550-iris
           - qcom,sm8650-iris
           - qcom,x1p42100-iris
@@ -73,10 +74,7 @@ properties:
 
   reset-names:
     minItems: 1
-    items:
-      - const: bus
-      - const: xo
-      - const: core
+    maxItems: 3
 
   iommus:
     maxItems: 2
@@ -112,13 +110,39 @@ allOf:
         resets:
           minItems: 3
         reset-names:
-          minItems: 3
-    else:
+          items:
+            - const: bus
+            - const: xo
+            - const: core
+  - if:
+      properties:
+        compatible:
+          enum:
+            - qcom,sm8450-iris
+    then:
+      properties:
+        resets:
+          minItems: 2
+          maxItems: 2
+        reset-names:
+          items:
+            - const: bus
+            - const: core
+  - if:
+      properties:
+        compatible:
+          not:
+            contains:
+              enum:
+                - qcom,sm8450-iris
+                - qcom,sm8650-iris
+    then:
       properties:
         resets:
           maxItems: 1
         reset-names:
-          maxItems: 1
+          items:
+            - const: bus
   - if:
       properties:
         compatible:
