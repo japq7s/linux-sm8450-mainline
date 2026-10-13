@@ -467,8 +467,15 @@ static int tianma_nt37705_bl_update_status(struct backlight_device *bl)
 
 	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
 
-	/* Only on a change: the set is ~200 bytes */
-	if (ctx->pwm_mode != mode) {
+	/*
+	 * Never leave the panel in the low mode with a level above the
+	 * threshold, not even between two writes: that shows as a washed out
+	 * flash. Going down, lower the level first; going up, switch the mode
+	 * first. Turning the backlight off keeps the current mode, the panel
+	 * is about to be powered off and prepare() resends it.
+	 */
+	if (brightness && ctx->pwm_mode != mode && mode) {
+		/* Only on a change: the set is ~200 bytes */
 		tianma_nt37705_pwm_switch(&dsi_ctx, mode);
 		if (dsi_ctx.accum_err)
 			return dsi_ctx.accum_err;
@@ -478,6 +485,13 @@ static int tianma_nt37705_bl_update_status(struct backlight_device *bl)
 	ret = mipi_dsi_dcs_set_display_brightness_large(dsi, brightness);
 	if (ret < 0)
 		return ret;
+
+	if (brightness && ctx->pwm_mode != mode && !mode) {
+		tianma_nt37705_pwm_switch(&dsi_ctx, mode);
+		if (dsi_ctx.accum_err)
+			return dsi_ctx.accum_err;
+		ctx->pwm_mode = mode;
+	}
 
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
