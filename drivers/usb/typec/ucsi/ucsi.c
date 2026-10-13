@@ -1373,6 +1373,14 @@ static void ucsi_partner_change(struct ucsi_connector *con)
 		UCSI_CONSTAT(con, PARTNER_FLAG_USB4_GEN4)))))
 		u_role = USB_ROLE_NONE;
 
+	/*
+	 * Some PPMs (Qualcomm PMIC GLINK) keep reporting the type of the last
+	 * partner after it went away, which would leave the role on DEVICE
+	 * or HOST after an unplug.
+	 */
+	if (!UCSI_CONSTAT(con, CONNECTED))
+		u_role = USB_ROLE_NONE;
+
 	ret = usb_role_switch_set_role(con->usb_role_sw, u_role);
 	if (ret)
 		dev_err(con->ucsi->dev, "con:%d: failed to set usb role:%d\n",
