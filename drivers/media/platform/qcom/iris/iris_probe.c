@@ -13,6 +13,7 @@
 #include <linux/soc/qcom/ubwc.h>
 
 #include "iris_core.h"
+#include "iris_secure_arp.h"
 #include "iris_ctrls.h"
 #include "iris_vidc.h"
 
@@ -265,6 +266,10 @@ static int iris_probe(struct platform_device *pdev)
 
 	iris_init_ops(core);
 
+	ret = iris_secure_arp_init(core);
+	if (ret)
+		return ret;
+
 	ret = iris_init_resources(core);
 	if (ret)
 		return ret;
@@ -403,11 +408,30 @@ static struct platform_driver qcom_iris_driver = {
 	.remove = iris_remove,
 	.driver = {
 		.name = "qcom-iris",
+		.suppress_bind_attrs = true,
 		.of_match_table = iris_dt_match,
 		.pm = &iris_pm_ops,
 	},
 };
 
-module_platform_driver(qcom_iris_driver);
+static int __init iris_module_init(void)
+{
+	int ret = platform_driver_register(&iris_secure_arp_driver);
+
+	if (ret)
+		return ret;
+	ret = platform_driver_register(&qcom_iris_driver);
+	if (ret)
+		platform_driver_unregister(&iris_secure_arp_driver);
+	return ret;
+}
+module_init(iris_module_init);
+
+static void __exit iris_module_exit(void)
+{
+	platform_driver_unregister(&qcom_iris_driver);
+	platform_driver_unregister(&iris_secure_arp_driver);
+}
+module_exit(iris_module_exit);
 MODULE_DESCRIPTION("Qualcomm iris video driver");
 MODULE_LICENSE("GPL");

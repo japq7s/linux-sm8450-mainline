@@ -7,6 +7,7 @@
 #include <media/v4l2-mem2mem.h>
 
 #include "iris_buffer.h"
+#include "iris_secure_arp.h"
 #include "iris_instance.h"
 #include "iris_power.h"
 #include "iris_vpu_buffer.h"
@@ -533,6 +534,7 @@ static int iris_create_internal_buffer(struct iris_inst *inst,
 	struct iris_buffers *buffers = &inst->buffers[buffer_type];
 	struct iris_core *core = inst->core;
 	struct iris_buffer *buffer;
+	int ret;
 
 	if (!buffers->size)
 		return 0;
@@ -545,6 +547,15 @@ static int iris_create_internal_buffer(struct iris_inst *inst,
 	buffer->type = buffer_type;
 	buffer->index = index;
 	buffer->buffer_size = buffers->size;
+	if (buffer_type == BUF_ARP && core->iris_firmware_desc->enc_secure_arp) {
+		ret = iris_secure_arp_alloc(inst, buffer);
+		if (ret) {
+			kfree(buffer);
+			return ret;
+		}
+		list_add_tail(&buffer->list, &buffers->list);
+		return 0;
+	}
 	buffer->dma_attrs = DMA_ATTR_WRITE_COMBINE | DMA_ATTR_NO_KERNEL_MAPPING;
 
 	buffer->kvaddr = dma_alloc_attrs(core->dev, buffer->buffer_size,
@@ -653,6 +664,11 @@ void iris_destroy_internal_buffer(struct iris_inst *inst, struct iris_buffer *bu
 	struct iris_core *core = inst->core;
 
 	list_del(&buffer->list);
+	if (buffer->secure) {
+		iris_secure_arp_free(inst, buffer);
+		kfree(buffer);
+		return;
+	}
 	dma_free_attrs(core->dev, buffer->buffer_size, buffer->kvaddr,
 		       buffer->device_addr, buffer->dma_attrs);
 	kfree(buffer);
