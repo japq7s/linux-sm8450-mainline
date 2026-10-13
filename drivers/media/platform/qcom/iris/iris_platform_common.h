@@ -288,6 +288,8 @@ struct iris_firmware_data {
 };
 
 struct iris_firmware_desc {
+	/* Firmware consumes individually indexed encoder reference frames. */
+	bool enc_dpb_per_buffer;
 	const struct iris_firmware_data *firmware_data;
 	u32 (*get_vpu_buffer_size)(struct iris_inst *inst, enum iris_buffer_type buffer_type);
 	const char *fwname;
