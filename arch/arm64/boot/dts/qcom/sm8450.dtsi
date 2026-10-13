@@ -3299,11 +3299,22 @@
 			reset-names = "bus",
 				      "core";
 
+			/*
+			 * Not dma-coherent: the encoder ARP buffer is handed to
+			 * TrustZone after a cache clean through the DMA API,
+			 * which is a no-op for coherent devices.
+			 */
 			iommus = <&apps_smmu 0x2180 0x400>,
 				 <&apps_smmu 0x2187 0x400>;
-			dma-coherent;
 
 			status = "disabled";
+
+			/* the encoder ARP buffer, owned by CP_NON_PIXEL (VMID 11) */
+			secure-arp {
+				compatible = "qcom,sm8450-iris-secure-arp";
+				iommus = <&apps_smmu 0x2184 0x400>;
+				qcom,iommu-vmid = <11>;
+			};
 
 			iris_opp_table: opp-table {
 				compatible = "operating-points-v2";
