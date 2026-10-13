@@ -313,8 +313,13 @@ static void vfe_setup_chroma_downscale_nv12(struct vfe_device *vfe, u32 w, u32 h
 	writel_relaxed(0x00000000, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_V_PHASE_CFG);
 }
 
-/* Demosaic + WB: sub offsets 0, gains 4.0, add offsets 0 */
-static void vfe_setup_demosaic(struct vfe_device *vfe)
+/* IFE 880: Q10 gain of 4.0 */
+const struct vfe_pp_desc vfe_pp_desc_880 = {
+	.wb_gain = 0x00001000,
+};
+
+/* Demosaic + WB: sub offsets 0, full scale gains, add offsets 0 */
+static void vfe_setup_demosaic(struct vfe_device *vfe, const struct vfe_pp_desc *desc)
 {
 	writel_relaxed(0x00000001, vfe->base + IFE_DEMOSAIC_MODULE_CFG);
 	writel_relaxed(0x00000080, vfe->base + IFE_DEMOSAIC_INTERP_COEFF_CFG_0);
@@ -322,9 +327,9 @@ static void vfe_setup_demosaic(struct vfe_device *vfe)
 	writel_relaxed(0x00000040, vfe->base + IFE_DEMOSAIC_INTERP_CLASSIFIER_CFG_0);
 	writel_relaxed(0x00000066, vfe->base + IFE_DEMOSAIC_INTERP_CLASSIFIER_CFG_1);
 	writel_relaxed(0x00000001, vfe->base + IFE_WB_GAIN_MODULE_CFG);
-	writel_relaxed(0x00001000, vfe->base + IFE_WB_GAIN_WB_CFG_0);
-	writel_relaxed(0x00001000, vfe->base + IFE_WB_GAIN_WB_CFG_1);
-	writel_relaxed(0x00001000, vfe->base + IFE_WB_GAIN_WB_CFG_2);
+	writel_relaxed(desc->wb_gain, vfe->base + IFE_WB_GAIN_WB_CFG_0);
+	writel_relaxed(desc->wb_gain, vfe->base + IFE_WB_GAIN_WB_CFG_1);
+	writel_relaxed(desc->wb_gain, vfe->base + IFE_WB_GAIN_WB_CFG_2);
 	writel_relaxed(0x00000000, vfe->base + IFE_WB_GAIN_WB_OFFSET_CFG_0);
 	writel_relaxed(0x00000000, vfe->base + IFE_WB_GAIN_WB_OFFSET_CFG_1);
 	writel_relaxed(0x00000000, vfe->base + IFE_WB_GAIN_WB_OFFSET_CFG_2);
@@ -611,11 +616,12 @@ static void vfe_setup_ds16(struct vfe_device *vfe, u32 w, u32 h)
 }
 
 /* Called from vfe_line_prepare() for NV12, ahead of the write masters and the IPP reg update */
-void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, u32 w, u32 h)
+void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
+			      u32 w, u32 h)
 {
 	vfe_setup_core_config(vfe);
 	vfe_setup_chroma_downscale_nv12(vfe, w, h);
-	vfe_setup_demosaic(vfe);
+	vfe_setup_demosaic(vfe, desc);
 	vfe_setup_color_correction(vfe);
 	vfe_setup_gamma_luts(vfe);
 	vfe_setup_color_transform(vfe);
