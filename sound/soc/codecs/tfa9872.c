@@ -88,6 +88,76 @@
 #define TFA9874_DCDC_CTRL6_DCVOF_MSK	GENMASK(8,  3)
 #define TFA9874_DCDC_CTRL6_DCVOS_MSK	GENMASK(14,  9)
 
+/*
+ * NXP bitfield id, as in the tfa98xx driver and in the tuning container:
+ * register address in bits 15..8, LSB position in bits 7..4, width - 1 in
+ * bits 3..0.
+ */
+#define TFA987X_BF_REG(bf)		((bf) >> 8)
+#define TFA987X_BF_POS(bf)		(((bf) >> 4) & 0xf)
+#define TFA987X_BF_LEN(bf)		(((bf) & 0xf) + 1)
+
+enum {
+	TFA987X_PROFILE_SPEAKER,
+	TFA987X_PROFILE_RECEIVER,
+	TFA987X_N_PROFILES,
+};
+
+struct tfa987x {
+	struct regmap *rmap;
+	/* <bitfield value> pairs from the devicetree, per profile */
+	u32 *profile_bf[TFA987X_N_PROFILES];
+	int profile_n[TFA987X_N_PROFILES];
+	unsigned int profile;
+};
+
+static int tfa987x_write_bitfields(struct regmap *rmap, const u32 *bf, int n)
+{
+	int i, ret;
+
+	for (i = 0; i < n; i += 2) {
+		unsigned int pos = TFA987X_BF_POS(bf[i]);
+		unsigned int mask = GENMASK(pos + TFA987X_BF_LEN(bf[i]) - 1, pos);
+
+		ret = regmap_update_bits(rmap, TFA987X_BF_REG(bf[i]), mask,
+					 bf[i + 1] << pos);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+/* Reads "<name>" = <bitfield value>...; NULL with *n = 0 if absent */
+static u32 *tfa987x_read_bitfields(struct device *dev, const char *name, int *n)
+{
+	u32 *bf;
+	int i, ret;
+
+	*n = 0;
+	ret = of_property_count_u32_elems(dev->of_node, name);
+	if (ret <= 0)
+		return NULL;
+	if (ret % 2)
+		return ERR_PTR(-EINVAL);
+
+	bf = devm_kcalloc(dev, ret, sizeof(*bf), GFP_KERNEL);
+	if (!bf)
+		return ERR_PTR(-ENOMEM);
+	*n = ret;
+	of_property_read_u32_array(dev->of_node, name, bf, *n);
+
+	for (i = 0; i < *n; i += 2) {
+		if (bf[i] > 0xffff ||
+		    TFA987X_BF_POS(bf[i]) + TFA987X_BF_LEN(bf[i]) > 16 ||
+		    bf[i + 1] >> TFA987X_BF_LEN(bf[i])) {
+			dev_err(dev, "%s: bad bitfield 0x%x = 0x%x\n",
+				name, bf[i], bf[i + 1]);
+			return ERR_PTR(-EINVAL);
+		}
+	}
+	return bf;
+}
+
 static int tfa987x_digital_mute(struct snd_soc_dai *codec_dai, int mute, int stream)
 {
 	struct snd_soc_component *component = codec_dai->component;
@@ -110,6 +180,75 @@ static int tfa987x_digital_mute(struct snd_soc_dai *codec_dai, int mute, int str
 static const struct snd_kcontrol_new tfa987x_amp_switch =
 	SOC_DAPM_SINGLE("Switch", SND_SOC_NOPM, 0, 1, 1);
 
+static const char * const tfa987x_profile_texts[] = { "speaker", "receiver" };
+
+static SOC_ENUM_SINGLE_VIRT_DECL(tfa987x_profile_enum, tfa987x_profile_texts);
+
+static int tfa987x_profile_get(struct snd_kcontrol *kcontrol,
+			       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
+
+	ucontrol->value.enumerated.item[0] = tfa->profile;
+	return 0;
+}
+
+/*
+ * Switch the amplifier settings between loudspeaker and earpiece use, as
+ * the NXP driver does with the profiles of the tuning container: with the
+ * amplifier powered down, then back to the previous power state.
+ */
+static int tfa987x_profile_put(struct snd_kcontrol *kcontrol,
+			       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
+	unsigned int profile = ucontrol->value.enumerated.item[0];
+	unsigned int ctrl0;
+	int ret;
+
+	if (profile >= TFA987X_N_PROFILES)
+		return -EINVAL;
+	if (profile == tfa->profile)
+		return 0;
+
+	ret = regmap_read(tfa->rmap, TFA987X_SYS_CTRL0, &ctrl0);
+	if (ret)
+		return ret;
+	if (!(ctrl0 & TFA987X_SYS_CTRL0_PWDN_MSK))
+		regmap_update_bits(tfa->rmap, TFA987X_SYS_CTRL0,
+				   TFA987X_SYS_CTRL0_PWDN_MSK,
+				   TFA987X_SYS_CTRL0_PWDN_MSK);
+
+	ret = tfa987x_write_bitfields(tfa->rmap, tfa->profile_bf[profile],
+				      tfa->profile_n[profile]);
+
+	if (!(ctrl0 & TFA987X_SYS_CTRL0_PWDN_MSK))
+		regmap_update_bits(tfa->rmap, TFA987X_SYS_CTRL0,
+				   TFA987X_SYS_CTRL0_PWDN_MSK, 0);
+	if (ret)
+		return ret;
+
+	tfa->profile = profile;
+	return 1;
+}
+
+static const struct snd_kcontrol_new tfa987x_profile_control =
+	SOC_ENUM_EXT("Profile", tfa987x_profile_enum,
+		     tfa987x_profile_get, tfa987x_profile_put);
+
+/* "<prefix> Profile" only exists when the devicetree describes a receiver */
+static int tfa987x_component_probe(struct snd_soc_component *component)
+{
+	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
+
+	if (!tfa->profile_n[TFA987X_PROFILE_RECEIVER])
+		return 0;
+	return snd_soc_add_component_controls(component,
+					      &tfa987x_profile_control, 1);
+}
+
 static const struct snd_soc_dapm_widget tfa987x_dapm_widgets[] = {
 	SND_SOC_DAPM_OUTPUT("Speaker"),
 	SND_SOC_DAPM_SWITCH("Amp", SND_SOC_NOPM, 0, 0, &tfa987x_amp_switch),
@@ -123,6 +262,7 @@ static const struct snd_soc_dapm_route tfa987x_dapm_routes[] = {
 };
 
 static const struct snd_soc_component_driver tfa987x_component = {
+	.probe			= tfa987x_component_probe,
 	.dapm_widgets		= tfa987x_dapm_widgets,
 	.num_dapm_widgets	= ARRAY_SIZE(tfa987x_dapm_widgets),
 	.dapm_routes		= tfa987x_dapm_routes,
@@ -294,14 +434,71 @@ static void tfa9874_init(struct regmap *rmap, unsigned int rev)
 		regmap_write(rmap, seq[i].reg, seq[i].val);
 }
 
+/* TFA9873 N1B factory settings, tfa9873_specific() "version 16" */
+static const struct tfa987x_reg_seq tfa9873_n1b_init[] = {	/* 0x0b73 */
+	{ 0x02, 0x0628 }, { 0x61, 0x0183 }, { 0x63, 0x005a }, { 0x6f, 0x0082 },
+	{ 0x70, 0xa3eb }, { 0x73, 0x0187 }, { 0x83, 0x071c }, { 0x85, 0x0380 },
+	{ 0xd5, 0x004d },
+};
+
+#define TFA9873_FSSYNCEN		0x0480
+
+static void tfa9873_init(struct regmap *rmap)
+{
+	static const u32 no_fs_sync[] = { TFA9873_FSSYNCEN, 0 };
+	unsigned int val;
+	int i;
+
+	/*
+	 * Unlock key 1 and 2. The TFA9873 keeps the key registers visible
+	 * ("advance keys handling" in tfa98xx), so 0x0f stays unlocked.
+	 */
+	regmap_write(rmap, 0x0f, 0x5a6b);
+	regmap_read(rmap, 0xfb, &val);
+	regmap_write(rmap, 0xa0, val ^ 0x005a);
+	regmap_update_bits(rmap, 0xa1, 0xff, 0x5a);
+
+	for (i = 0; i < ARRAY_SIZE(tfa9873_n1b_init); i++)
+		regmap_write(rmap, tfa9873_n1b_init[i].reg,
+			     tfa9873_n1b_init[i].val);
+
+	/* tfa9873_specific() disables FS synchronisation */
+	tfa987x_write_bitfields(rmap, no_fs_sync, ARRAY_SIZE(no_fs_sync));
+}
+
 static int tfa987x_i2c_probe(struct i2c_client *i2c)
 {
+	static const char * const profile_props[TFA987X_N_PROFILES] = {
+		"nxp,speaker-bitfields", "nxp,receiver-bitfields" };
 	struct device *dev = &i2c->dev;
 	struct gpio_desc *reset;
 	struct regmap *rmap;
+	struct tfa987x *tfa;
 	unsigned int rev;
+	u32 *init_bf;
+	int init_n, i;
 	u32 slot = 0;
 	int ret;
+
+	tfa = devm_kzalloc(dev, sizeof(*tfa), GFP_KERNEL);
+	if (!tfa)
+		return -ENOMEM;
+	dev_set_drvdata(dev, tfa);
+
+	/* Board tuning, the bitfields of the vendor's tuning container */
+	init_bf = tfa987x_read_bitfields(dev, "nxp,init-bitfields", &init_n);
+	if (IS_ERR(init_bf))
+		return PTR_ERR(init_bf);
+	for (i = 0; i < TFA987X_N_PROFILES; i++) {
+		tfa->profile_bf[i] = tfa987x_read_bitfields(dev, profile_props[i],
+							    &tfa->profile_n[i]);
+		if (IS_ERR(tfa->profile_bf[i]))
+			return PTR_ERR(tfa->profile_bf[i]);
+	}
+	if (tfa->profile_n[TFA987X_PROFILE_RECEIVER] &&
+	    !tfa->profile_n[TFA987X_PROFILE_SPEAKER])
+		return dev_err_probe(dev, -EINVAL,
+				     "receiver bitfields without speaker bitfields\n");
 
 	ret = devm_regulator_get_enable_optional(dev, "vdd");
 	if (ret && ret != -ENODEV)
@@ -323,6 +520,7 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 	rmap = devm_regmap_init_i2c(i2c, &tfa987x_regmap_config);
 	if (IS_ERR(rmap))
 		return PTR_ERR(rmap);
+	tfa->rmap = rmap;
 
 	ret = regmap_read(rmap, TFA987X_REV, &rev);
 	if (ret < 0) {
@@ -350,6 +548,8 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 
 	if ((rev & 0xff) == 0x74)
 		tfa9874_init(rmap, rev);
+	else if (rev == 0x0b73)
+		tfa9873_init(rmap);
 
 	/* Setup DC-DC Converter if we have configuration */
 	regmap_update_bits(rmap, TFA987X_SYS_CTRL0, TFA987X_SYS_CTRL0_DCDC_MSK,
@@ -388,6 +588,14 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 		regmap_update_bits(rmap, TFA987X_MODE1_DET1,
 				 TFA987X_MODE1_DET1_LPM1MODE_MSK,
 				 FIELD_PREP(TFA987X_MODE1_DET1_LPM1MODE_MSK, 1));
+
+	ret = tfa987x_write_bitfields(rmap, init_bf, init_n);
+	if (!ret)
+		ret = tfa987x_write_bitfields(rmap,
+				tfa->profile_bf[TFA987X_PROFILE_SPEAKER],
+				tfa->profile_n[TFA987X_PROFILE_SPEAKER]);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to write the tuning\n");
 
 	/* Turn on this thing */
 	regmap_update_bits(rmap, TFA987X_SYS_CTRL0,
