@@ -374,6 +374,12 @@ static void vfe_setup_demux_bls(struct vfe_device *vfe, u32 code)
 	writel_relaxed(IFE_DEMUX_BLS_PERIOD(1) | 1, vfe->base + IFE_DEMUX_BLS_MODULE_CFG);
 }
 
+/* IFE 780: Q10 gain held in bits 31:17, its demosaic needs the black level gone */
+const struct vfe_pp_desc vfe_pp_desc_780 = {
+	.wb_gain = 0x400 << 17,
+	.demux_bls = true,
+};
+
 /* IFE 880: Q10 gain of 4.0 */
 const struct vfe_pp_desc vfe_pp_desc_880 = {
 	.wb_gain = 0x00001000,

@@ -12,6 +12,7 @@ struct vfe_pp_desc {
 	bool demux_bls;	/* subtract the black level in demux + BLS */
 };
 
+extern const struct vfe_pp_desc vfe_pp_desc_780;
 extern const struct vfe_pp_desc vfe_pp_desc_880;
 
 void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *desc,

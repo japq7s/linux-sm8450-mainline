@@ -238,6 +238,9 @@ static inline void vfe_reg_update_clear(struct vfe_device *vfe,
  */
 static const struct vfe_pp_desc *vfe_pp_desc(struct vfe_device *vfe)
 {
+	if (vfe->camss->res->version == CAMSS_8550)
+		return &vfe_pp_desc_780;
+
 	return &vfe_pp_desc_880;
 }
 
