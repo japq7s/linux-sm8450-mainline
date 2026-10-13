@@ -175,6 +175,12 @@ const struct iris_platform_data sm8450_data = {
 	.tz_cp_config_data = tz_cp_config_vpu3,
 	.tz_cp_config_data_size = ARRAY_SIZE(tz_cp_config_vpu3),
 	.resume_without_payload = true,
+	/*
+	 * The SM8450 encoder accesses its ARP buffer through a secure stream
+	 * and needs it owned by CP_NON_PIXEL; an ordinary buffer makes the
+	 * first encode session reset the SoC.
+	 */
+	.no_encoder = true,
 	.num_vpp_pipe = 4,
 	.wd_intr_mask = WRAPPER_INTR_STATUS_A2HWD_BMSK,
 	.icc_ib_multiplier = 1,
