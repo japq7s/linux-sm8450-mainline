@@ -376,6 +376,12 @@ enum arm_smmu_domain_stage {
 };
 
 struct arm_smmu_domain {
+	u32 secure_vmid;
+	bool secure_faulted;
+	unsigned int secure_pt_count;
+	spinlock_t secure_pt_lock;
+	struct list_head secure_pt_pages;
+	struct list_head secure_quarantine;
 	struct arm_smmu_device		*smmu;
 	struct io_pgtable_ops		*pgtbl_ops;
 	unsigned long			pgtbl_quirks;
@@ -433,6 +439,7 @@ static inline u32 arm_smmu_lpae_vtcr(const struct io_pgtable_cfg *cfg)
 
 /* Implementation details, yay! */
 struct arm_smmu_impl {
+	void (*destroy_context)(struct arm_smmu_domain *smmu_domain);
 	u32 (*read_reg)(struct arm_smmu_device *smmu, int page, int offset);
 	void (*write_reg)(struct arm_smmu_device *smmu, int page, int offset,
 			  u32 val);
