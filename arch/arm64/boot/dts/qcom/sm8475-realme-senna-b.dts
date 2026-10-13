@@ -75,9 +75,10 @@
 	};
 
 	/*
-	 * Battery/charger run on the ADSP (downstream qcom,pmic_glink with
-	 * qcom,battery_charger, qcom,ucsi and qcom,altmode). No USB-C
-	 * connector yet: USB stays in fixed peripheral mode for now.
+	 * Battery/charger and the USB-C port controller run on the ADSP
+	 * (downstream qcom,pmic_glink with qcom,battery_charger, qcom,ucsi and
+	 * qcom,altmode). UCSI reports the data role of the port and drives the
+	 * DWC3 role switch. USB 2.0 only: the SuperSpeed lanes are not wired up.
 	 */
 	pmic-glink {
 		compatible = "qcom,sm8475-pmic-glink",
@@ -85,6 +86,26 @@
 			     "qcom,pmic-glink";
 		#address-cells = <1>;
 		#size-cells = <0>;
+
+		connector@0 {
+			compatible = "usb-c-connector";
+			reg = <0>;
+			power-role = "dual";
+			data-role = "dual";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					pmic_glink_hs_in: endpoint {
+						remote-endpoint = <&usb_1_dwc3_hs>;
+					};
+				};
+			};
+		};
 	};
 
 	/*
@@ -1359,17 +1380,17 @@
 	status = "okay";
 };
 
-/*
- * USB 2.0 only. No role switching yet (pmic-glink has no USB-C connector
- * here): fixed peripheral mode, enough for USB networking.
- */
+/* USB 2.0 only, the role follows the USB-C port (UCSI over pmic-glink) */
 &usb_1 {
 	qcom,select-utmi-as-pipe-clk;
-	dr_mode = "peripheral";
 	maximum-speed = "high-speed";
 	phys = <&usb_1_hsphy>;
 	phy-names = "usb2-phy";
 	status = "okay";
+};
+
+&usb_1_dwc3_hs {
+	remote-endpoint = <&pmic_glink_hs_in>;
 };
 
 &usb_1_hsphy {
