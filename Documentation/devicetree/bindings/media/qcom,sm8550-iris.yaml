@@ -89,6 +89,26 @@ properties:
   opp-table:
     type: object
 
+  secure-arp:
+    type: object
+    description:
+      SM8450 encoder ARP traffic goes through a separate protected SMMU
+      stream even for non-secure sessions; its buffer pages are owned by
+      the given VMID.
+    properties:
+      compatible:
+        const: qcom,sm8450-iris-secure-arp
+      iommus:
+        maxItems: 1
+      qcom,iommu-vmid:
+        $ref: /schemas/types.yaml#/definitions/uint32
+        const: 11
+    required:
+      - compatible
+      - iommus
+      - qcom,iommu-vmid
+    additionalProperties: false
+
 required:
   - compatible
   - power-domain-names
@@ -97,9 +117,17 @@ required:
   - resets
   - reset-names
   - iommus
-  - dma-coherent
 
 allOf:
+  - if:
+      properties:
+        compatible:
+          not:
+            contains:
+              const: qcom,sm8450-iris
+    then:
+      required:
+        - dma-coherent
   - if:
       properties:
         compatible:
