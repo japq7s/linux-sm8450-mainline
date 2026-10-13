@@ -1294,7 +1294,8 @@ static void iris_hfi_gen2_get_buffer(u32 domain, struct iris_buffer *buffer,
 	buf->data_size = buffer->data_size;
 	if (buffer->attr & BUF_ATTR_PENDING_RELEASE)
 		buf->flags |= HFI_BUF_HOST_FLAG_RELEASE;
-	buf->flags |= HFI_BUF_HOST_FLAGS_CB_NON_SECURE;
+	if (!buffer->secure)
+		buf->flags |= HFI_BUF_HOST_FLAGS_CB_NON_SECURE;
 	buf->timestamp = buffer->timestamp;
 }
 

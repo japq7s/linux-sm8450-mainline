@@ -84,6 +84,7 @@ enum iris_buffer_attributes {
  * @attr: enum for iris buffer attributes
  */
 struct iris_buffer {
+	struct iris_secure_buffer *secure;
 	struct vb2_v4l2_buffer		vb2;
 	struct list_head		list;
 	struct iris_inst		*inst;

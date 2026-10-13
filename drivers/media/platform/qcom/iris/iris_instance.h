@@ -81,6 +81,7 @@ enum iris_fmt_type_cap {
  */
 
 struct iris_inst {
+	bool session_closed;
 	struct list_head		list;
 	struct iris_core		*core;
 	u32				session_id;
