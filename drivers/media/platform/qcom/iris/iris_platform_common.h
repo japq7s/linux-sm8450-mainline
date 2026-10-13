@@ -321,6 +321,8 @@ struct iris_platform_data {
 	bool no_aon;
 	/* HFI_CMD_RESUME without the reason payload (SM8450 firmware) */
 	bool resume_without_payload;
+	/* the encoder is not usable yet, do not register its video device */
+	bool no_encoder;
 	u32 max_session_count;
 	/* max number of macroblocks per frame supported */
 	u32 max_core_mbpf;
