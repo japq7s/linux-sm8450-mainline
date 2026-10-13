@@ -13,11 +13,18 @@
 #include "iris_vpu_common.h"
 
 #include "iris_platform_qcs8300.h"
+#include "iris_platform_sm8450.h"
 #include "iris_platform_sm8550.h"
 #include "iris_platform_sm8650.h"
 #include "iris_platform_sm8750.h"
 #include "iris_platform_kaanapali.h"
 #include "iris_platform_x1p42100.h"
+
+static const struct iris_firmware_desc iris_vpu20_p4_gen2_desc = {
+	.firmware_data = &iris_hfi_gen2_data,
+	.get_vpu_buffer_size = iris_vpu_buf_size,
+	.fwname = "qcom/vpu/vpu20_4v.mbn",
+};
 
 static const struct iris_firmware_desc iris_vpu30_p4_s6_gen2_desc = {
 	.firmware_data = &iris_hfi_gen2_data,
@@ -123,6 +130,49 @@ const struct iris_platform_data qcs8300_data = {
 	.max_session_count = 16,
 	.max_core_mbpf = ((4096 * 2176) / 256) * 4,
 	.max_core_mbps = (((3840 * 2176) / 256) * 120),
+};
+
+/* The SM8450 firmware has no AV1 decoder, an AV1 session crashes it */
+static const u32 iris_fmts_sm8450_dec[] = {
+	[IRIS_FMT_H264] = V4L2_PIX_FMT_H264,
+	[IRIS_FMT_HEVC] = V4L2_PIX_FMT_HEVC,
+	[IRIS_FMT_VP9] = V4L2_PIX_FMT_VP9,
+};
+
+/*
+ * SM8450 has a 4-pipe VPU 2.0 ("iris2") running HFI gen2 firmware. Its power
+ * sequences (VCODEC_SS idle polling, MVP NoC reset, AHB bridge reset) and
+ * resources (MVS0C/MVS0 GDSCs, MXC and MMCX rails) are the ones of the VPU3
+ * path rather than of SM8250.
+ */
+const struct iris_platform_data sm8450_data = {
+	.firmware_desc_gen2 = &iris_vpu20_p4_gen2_desc,
+	.vpu_ops = &iris_vpu3_ops,
+	.icc_tbl = iris_icc_info_vpu3x,
+	.icc_tbl_size = ARRAY_SIZE(iris_icc_info_vpu3x),
+	.clk_rst_tbl = sm8450_clk_reset_table,
+	.clk_rst_tbl_size = ARRAY_SIZE(sm8450_clk_reset_table),
+	.bw_tbl_dec = iris_bw_table_dec_vpu3x,
+	.bw_tbl_dec_size = ARRAY_SIZE(iris_bw_table_dec_vpu3x),
+	.pmdomain_tbl = iris_pmdomain_table_vpu3x,
+	.pmdomain_tbl_size = ARRAY_SIZE(iris_pmdomain_table_vpu3x),
+	.opp_pd_tbl = iris_opp_pd_table_vpu3x,
+	.opp_pd_tbl_size = ARRAY_SIZE(iris_opp_pd_table_vpu3x),
+	.clk_tbl = sm8550_clk_table,
+	.clk_tbl_size = ARRAY_SIZE(sm8550_clk_table),
+	.opp_clk_tbl = iris_opp_clk_table_vpu3x,
+	/* Upper bound of DMA address range */
+	.dma_mask = 0xe0000000 - 1,
+	.inst_iris_fmts = iris_fmts_sm8450_dec,
+	.inst_iris_fmts_size = ARRAY_SIZE(iris_fmts_sm8450_dec),
+	.inst_caps = &platform_inst_cap_sm8450,
+	.tz_cp_config_data = tz_cp_config_vpu3,
+	.tz_cp_config_data_size = ARRAY_SIZE(tz_cp_config_vpu3),
+	.resume_without_payload = true,
+	.num_vpp_pipe = 4,
+	.max_session_count = 16,
+	.max_core_mbpf = ((8192 * 4320) / 256) * 2,
+	.max_core_mbps = ((7680 * 4320) / 256) * 60,
 };
 
 const struct iris_platform_data sm8550_data = {
