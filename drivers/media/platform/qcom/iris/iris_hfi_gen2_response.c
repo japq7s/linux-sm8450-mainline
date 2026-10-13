@@ -313,6 +313,7 @@ static void iris_hfi_gen2_handle_session_close(struct iris_inst *inst,
 		return;
 	}
 
+	inst->session_closed = true;
 	complete(&inst->completion);
 }
 

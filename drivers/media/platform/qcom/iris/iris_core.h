@@ -80,6 +80,7 @@ struct qcom_ubwc_cfg_data;
  */
 
 struct iris_core {
+	struct device *secure_arp_dev;
 	struct device				*dev;
 	void __iomem				*reg_base;
 	int					irq;
