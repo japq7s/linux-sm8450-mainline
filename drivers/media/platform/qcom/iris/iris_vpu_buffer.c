@@ -1739,6 +1739,9 @@ static u32 iris_vpu_enc_scratch2_size(struct iris_inst *inst)
 	u32 frame_width = iris_vpu_enc_get_bitstream_width(inst);
 	u32 num_ref = hfi_buffer_get_recon_count(inst);
 
+	if (inst->core->iris_firmware_desc->enc_dpb_per_buffer)
+		return hfi_buffer_dpb_enc(frame_width, frame_height, false);
+
 	return hfi_buffer_scratch2_enc(frame_width, frame_height, num_ref, false);
 }
 
@@ -2243,8 +2246,12 @@ int iris_vpu_buf_count(struct iris_inst *inst, enum iris_buffer_type buffer_type
 	case BUF_LINE:
 	case BUF_PERSIST:
 		return internal_buffer_count(inst, buffer_type);
-	case BUF_SCRATCH_1:
 	case BUF_SCRATCH_2:
+		if (inst->domain == ENCODER &&
+		    inst->core->iris_firmware_desc->enc_dpb_per_buffer)
+			return hfi_buffer_get_recon_count(inst) + 1;
+		return 1;
+	case BUF_SCRATCH_1:
 	case BUF_VPSS:
 	case BUF_ARP:
 	case BUF_PARTIAL:
