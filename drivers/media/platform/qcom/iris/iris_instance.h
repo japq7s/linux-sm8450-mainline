@@ -70,6 +70,7 @@ struct iris_hfi_session_ops;
  */
 
 struct iris_inst {
+	bool session_closed;
 	struct list_head		list;
 	struct kref			kref;
 	struct iris_core		*core;
