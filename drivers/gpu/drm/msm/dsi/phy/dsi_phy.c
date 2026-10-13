@@ -5,7 +5,7 @@
 
 #include <linux/clk-provider.h>
 #include <linux/platform_device.h>
-#include <linux/pm_clock.h>
+#include <linux/clk.h>
 #include <linux/pm_runtime.h>
 #include <dt-bindings/phy/phy.h>
 
@@ -687,13 +687,10 @@ static int dsi_phy_driver_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	ret = devm_pm_clk_create(dev);
-	if (ret)
-		return ret;
-
-	ret = pm_clk_add(dev, "iface");
-	if (ret < 0)
-		return dev_err_probe(dev, ret, "Unable to get iface clk\n");
+	phy->ahb_clk = devm_clk_get(dev, "iface");
+	if (IS_ERR(phy->ahb_clk))
+		return dev_err_probe(dev, PTR_ERR(phy->ahb_clk),
+				     "Unable to get iface clk\n");
 
 	if (phy->cfg->ops.pll_init) {
 		ret = phy->cfg->ops.pll_init(phy);
@@ -711,8 +708,31 @@ static int dsi_phy_driver_probe(struct platform_device *pdev)
 	return 0;
 }
 
+/*
+ * Not pm_clk: it keeps the clock prepared for the lifetime of the device,
+ * and a prepared clock holds its provider (the display clock controller)
+ * runtime resumed. That keeps the provider's MMCX performance vote, and
+ * with it CX, up while the display is off, so the SoC never reaches CX
+ * collapse.
+ */
+static int dsi_phy_runtime_suspend(struct device *dev)
+{
+	struct msm_dsi_phy *phy = dev_get_drvdata(dev);
+
+	clk_disable_unprepare(phy->ahb_clk);
+
+	return 0;
+}
+
+static int dsi_phy_runtime_resume(struct device *dev)
+{
+	struct msm_dsi_phy *phy = dev_get_drvdata(dev);
+
+	return clk_prepare_enable(phy->ahb_clk);
+}
+
 static const struct dev_pm_ops dsi_phy_pm_ops = {
-	SET_RUNTIME_PM_OPS(pm_clk_suspend, pm_clk_resume, NULL)
+	SET_RUNTIME_PM_OPS(dsi_phy_runtime_suspend, dsi_phy_runtime_resume, NULL)
 };
 
 static struct platform_driver dsi_phy_platform_driver = {
