@@ -352,6 +352,8 @@ struct iris_platform_data {
 	bool no_rpmh;
 	u32 wd_intr_mask;
 	u32 icc_ib_multiplier;
+	/* HFI_CMD_RESUME without the reason payload (SM8450 firmware) */
+	bool resume_without_payload;
 	u32 max_session_count;
 	/* max number of macroblocks per frame supported */
 	u32 max_core_mbpf;
