@@ -3865,9 +3865,19 @@ static int haptics_upload_effect(struct input_dev *dev,
 		break;
 	case FF_PERIODIC:
 		if (effect->u.periodic.waveform != FF_CUSTOM) {
-			dev_err(chip->dev, "Only support custom waveforms\n");
-			rc = -EINVAL;
-			goto restore;
+			/*
+			 * Plain periodic effects (feedbackd uploads FF_SINE) are
+			 * played as a direct mode vibration of the same length,
+			 * scaled by the magnitude.
+			 */
+			length_ms = effect->replay.length;
+			tmp = get_direct_play_max_amplitude(chip);
+			tmp *= abs(effect->u.periodic.magnitude);
+			amplitude = tmp / 0x7fff;
+			schedule_delayed_work(&chip->stop_work,
+					      msecs_to_jiffies(length_ms));
+			haptics_load_constant_effect(chip, amplitude);
+			break;
 		}
 
 		if (effect->u.periodic.custom_len ==
