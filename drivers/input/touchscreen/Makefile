@@ -126,3 +126,4 @@ obj-$(CONFIG_TOUCHSCREEN_SYNA_TCM2) += syna_tcm2.o
 obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_TCM_ONCELL)	+= synaptics_tcm_oncell.o synaptics_common.o
 obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_TCM)		+= synaptics_tcm.o
 obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_TCM_SPI)	+= synaptics_tcm_spi.o
+obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_TCM_S3910)	+= synaptics_tcm_s3910.o
