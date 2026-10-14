@@ -17,6 +17,7 @@
 #include <dt-bindings/iio/qcom,spmi-adc7-pm8350.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/input/linux-event-codes.h>
+#include <dt-bindings/leds/common.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 
@@ -868,6 +869,44 @@
 		qcom,param-override-seq-host = <0x62 0x08 0x00 0x07 0x50 0x06 0x03 0x0a>;
 
 		#phy-cells = <0>;
+	};
+};
+
+/* downstream qupv3_se2_i2c: aw210xx_led@1C (oplus_breathing/senna_breathing_leds.dtsi) */
+&i2c2 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	led-controller@1c {
+		compatible = "awinic,aw210xx";
+		reg = <0x1c>;
+
+		enable-gpios = <&tlmm 155 GPIO_ACTIVE_HIGH>;
+		vbled-gpios = <&tlmm 153 GPIO_ACTIVE_HIGH>;
+		awinic,global-current = <0xcc>;
+
+		/* channels as used by the downstream driver: SL09..SL11 = R, G, B */
+		multi-led {
+			color = <LED_COLOR_ID_RGB>;
+			function = LED_FUNCTION_STATUS;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			led@9 {
+				reg = <9>;
+				color = <LED_COLOR_ID_RED>;
+			};
+
+			led@a {
+				reg = <10>;
+				color = <LED_COLOR_ID_GREEN>;
+			};
+
+			led@b {
+				reg = <11>;
+				color = <LED_COLOR_ID_BLUE>;
+			};
+		};
 	};
 };
 
