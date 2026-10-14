@@ -14,6 +14,18 @@ config LEDS_GROUP_MULTICOLOR
 	  To compile this driver as a module, choose M here: the module
 	  will be called leds-group-multicolor.
 
+config LEDS_AW210XX
+	tristate "LED support for Awinic AW21009/AW21012/AW21018"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  This option enables support for the Awinic AW210XX LED controllers
+	  in constant current mode, with the LEDs grouped into one multicolor
+	  LED, as on the back panel of the realme GT Neo5.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called leds-aw210xx.
+
 config LEDS_KTD202X
 	tristate "LED support for KTD202x Chips"
 	depends on I2C
