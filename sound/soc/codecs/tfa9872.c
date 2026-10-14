@@ -515,7 +515,8 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 	}
 
 	/* TDM/I2S slot this amplifier plays (0 = left, 1 = right) */
-	of_property_read_u32(dev->of_node, "nxp,tdm-slot", &slot);
+	if (of_property_read_u32(dev->of_node, "nxp,tdm-slot", &slot))
+		of_property_read_u32(dev->of_node, "sound-channel", &slot);
 
 	rmap = devm_regmap_init_i2c(i2c, &tfa987x_regmap_config);
 	if (IS_ERR(rmap))
