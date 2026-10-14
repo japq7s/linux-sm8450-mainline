@@ -924,7 +924,7 @@
  * from the controller's own pin state, applied before link training.
  */
 &pcie0 {
-	pinctrl-0 = <&pcie0_default_state>, <&wlan_en_default>;
+	pinctrl-0 = <&pcie0_default_state>, <&wcn_xo_clk_default>, <&wlan_en_default>;
 	pinctrl-names = "default";
 
 	/*
@@ -1268,6 +1268,20 @@
 		function = "gpio";
 		drive-strength = <2>;
 		bias-pull-up;
+	};
+
+	/*
+	 * WCN6855 XO_CLK select (downstream qcom,xo-clk-gpio = tlmm 204 in the
+	 * cnss-qca6490 and bt_qca6490 nodes). The stock kernels take it from the
+	 * eGPIO island and drive it low (5.10 dump: out low, func0, pull down);
+	 * left as eGPIO it is not driven by APPS at all.
+	 */
+	wcn_xo_clk_default: wcn-xo-clk-default-state {
+		pins = "gpio204";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+		output-low;
 	};
 
 	/* downstream cnss_wlan_en_active */
