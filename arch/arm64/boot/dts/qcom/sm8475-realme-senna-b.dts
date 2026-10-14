@@ -1067,6 +1067,35 @@
 	status = "okay";
 };
 
+&pmk8350_sdam_2 {
+	hap_cl_brake: cl-brake@7c {
+		reg = <0x7c 0x1>;
+		bits = <0 8>;
+	};
+};
+
+/*
+ * PM8350B HV haptics (LRA), values of the stock qcom,hv-haptics@f000 node;
+ * the effects are the pm8350b.dtsi defaults, identical to stock.
+ */
+&pm8350b_haptics {
+	nvmem-cell-names = "hap_cl_brake";
+	nvmem-cells = <&hap_cl_brake>;
+	nvmem-names = "hap_cfg_sdam";
+	nvmem = <&pmk8350_sdam_46>;
+	qcom,pbs-client = <&pm8350b_pbs2>;
+
+	qcom,vmax-mv = <1280>;
+	qcom,cl-vmax-mv = <1280>;
+	qcom,lra-period-us = <5882>;
+	qcom,fifo-vmax-mv = <9100>;
+	qcom,old-steady-vmax-mv = <9100>;
+	qcom,cal-data-restore;
+	qcom,vibrator-type = <809>;
+
+	status = "okay";
+};
+
 &pmk8350_vadc {
 	/*
 	 * Charger NTCs. qcom,scale-fn-type 5 (SCALE_HW_CALIB_DEFAULT): the
