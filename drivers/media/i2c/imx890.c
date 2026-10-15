@@ -7,8 +7,9 @@
  * are identical for the tables used here). The driver structure follows the
  * Fairphone 5 IMX800 bring-up (same Sony IMX766 family).
  *
- * Only the 4096x3072 2x2 binned mode at 30 fps is supported, output on a
- * 3-trio MIPI C-PHY link.
+ * The 2x2 binned 4096x3072 and 4096x2304 modes and the 4x4 binned 1296x736
+ * mode are supported, all at 30 fps by default and with the same output
+ * PLL, on a 3-trio MIPI C-PHY link.
  *
  * Copyright (C) 2026 japq7s <japiotr123@proton.me>
  */
@@ -54,10 +55,12 @@
 #define IMX890_LINK_FREQ		1238400000ULL
 
 /*
- * Video timing PLL: 19.2 MHz / 3 (0x0305) * 303 (0x0306/7) / 4 (0x0303) /
- * 5 (0x0301), 16 pixels per clock. FLL 3310 * LLP 15616 * 30 fps.
+ * The pixel rate of each mode is its video timing PLL output with 16 pixels
+ * per clock, e.g. 19.2 MHz / 3 (0x0305) * 303 (0x0306/7) / 4 (0x0303) /
+ * 5 (0x0301) * 16 for 4096x3072, which gives FLL 3310 * LLP 15616 * 30 fps.
  */
-#define IMX890_PIXEL_RATE		1551360000ULL
+#define IMX890_PIXEL_RATE_MIN		1484800000
+#define IMX890_PIXEL_RATE_MAX		2170880000
 
 static const char * const imx890_supply_names[] = {
 	"vio",		/* 1.8 V interface */
@@ -71,6 +74,7 @@ struct imx890_mode {
 	u32 height;
 	u32 fll;
 	u32 llp;
+	u64 pixel_rate;
 	const struct cci_reg_sequence *regs;
 	unsigned int num_regs;
 };
@@ -988,14 +992,305 @@ static const struct cci_reg_sequence imx890_4096x3072_regs[] = {
 	{ CCI_REG8(0xec12), 0x01 },
 };
 
+static const struct cci_reg_sequence imx890_4096x2304_regs[] = {
+	{ CCI_REG8(0x0112), 0x0a },
+	{ CCI_REG8(0x0113), 0x0a },
+	{ CCI_REG8(0x0114), 0x02 },
+	{ CCI_REG8(0x0342), 0x3d },
+	{ CCI_REG8(0x0343), 0x00 },
+	{ CCI_REG8(0x0340), 0x0c },
+	{ CCI_REG8(0x0341), 0x60 },
+	{ CCI_REG8(0x0344), 0x00 },
+	{ CCI_REG8(0x0345), 0x00 },
+	{ CCI_REG8(0x0346), 0x03 },
+	{ CCI_REG8(0x0347), 0x00 },
+	{ CCI_REG8(0x0348), 0x1f },
+	{ CCI_REG8(0x0349), 0xff },
+	{ CCI_REG8(0x034a), 0x14 },
+	{ CCI_REG8(0x034b), 0xff },
+	{ CCI_REG8(0x0900), 0x01 },
+	{ CCI_REG8(0x0901), 0x22 },
+	{ CCI_REG8(0x0902), 0x08 },
+	{ CCI_REG8(0x3005), 0x02 },
+	{ CCI_REG8(0x3120), 0x04 },
+	{ CCI_REG8(0x3121), 0x01 },
+	{ CCI_REG8(0x3200), 0x41 },
+	{ CCI_REG8(0x3201), 0x41 },
+	{ CCI_REG8(0x32d6), 0x00 },
+	{ CCI_REG8(0x0408), 0x00 },
+	{ CCI_REG8(0x0409), 0x00 },
+	{ CCI_REG8(0x040a), 0x00 },
+	{ CCI_REG8(0x040b), 0x00 },
+	{ CCI_REG8(0x040c), 0x10 },
+	{ CCI_REG8(0x040d), 0x00 },
+	{ CCI_REG8(0x040e), 0x09 },
+	{ CCI_REG8(0x040f), 0x00 },
+	{ CCI_REG8(0x034c), 0x10 },
+	{ CCI_REG8(0x034d), 0x00 },
+	{ CCI_REG8(0x034e), 0x09 },
+	{ CCI_REG8(0x034f), 0x00 },
+	{ CCI_REG8(0x0301), 0x05 },
+	{ CCI_REG8(0x0303), 0x04 },
+	{ CCI_REG8(0x0305), 0x03 },
+	{ CCI_REG8(0x0306), 0x01 },
+	{ CCI_REG8(0x0307), 0x22 },
+	{ CCI_REG8(0x030b), 0x02 },
+	{ CCI_REG8(0x030d), 0x02 },
+	{ CCI_REG8(0x030e), 0x01 },
+	{ CCI_REG8(0x030f), 0x02 },
+	{ CCI_REG8(0x30cb), 0x00 },
+	{ CCI_REG8(0x30cc), 0x10 },
+	{ CCI_REG8(0x30cd), 0x00 },
+	{ CCI_REG8(0x30ce), 0x03 },
+	{ CCI_REG8(0x30cf), 0x00 },
+	{ CCI_REG8(0x319c), 0x01 },
+	{ CCI_REG8(0x3800), 0x01 },
+	{ CCI_REG8(0x3801), 0x01 },
+	{ CCI_REG8(0x3802), 0x02 },
+	{ CCI_REG8(0x3847), 0x03 },
+	{ CCI_REG8(0x38b0), 0x00 },
+	{ CCI_REG8(0x38b1), 0x00 },
+	{ CCI_REG8(0x38b2), 0x00 },
+	{ CCI_REG8(0x38b3), 0x00 },
+	{ CCI_REG8(0x38c4), 0x01 },
+	{ CCI_REG8(0x38c5), 0x2c },
+	{ CCI_REG8(0x38e0), 0x00 },
+	{ CCI_REG8(0x38e1), 0x00 },
+	{ CCI_REG8(0x8be4), 0x00 },
+	{ CCI_REG8(0x8be5), 0x00 },
+	{ CCI_REG8(0x3890), 0x00 },
+	{ CCI_REG8(0x3891), 0x00 },
+	{ CCI_REG8(0x3894), 0x00 },
+	{ CCI_REG8(0x3895), 0x00 },
+	{ CCI_REG8(0x4c3a), 0x02 },
+	{ CCI_REG8(0x4c3b), 0xd2 },
+	{ CCI_REG8(0x4c68), 0x04 },
+	{ CCI_REG8(0x4c69), 0x7e },
+	{ CCI_REG8(0x4cf8), 0x07 },
+	{ CCI_REG8(0x4cf9), 0x9e },
+	{ CCI_REG8(0x4db8), 0x08 },
+	{ CCI_REG8(0x4db9), 0x98 },
+	{ CCI_REG8(0x0224), 0x01 },
+	{ CCI_REG8(0x0225), 0xf4 },
+	{ CCI_REG8(0x313a), 0x01 },
+	{ CCI_REG8(0x313b), 0xf4 },
+	{ CCI_REG8(0x3803), 0x00 },
+	{ CCI_REG8(0x3804), 0x17 },
+	{ CCI_REG8(0x3805), 0xc0 },
+	{ CCI_REG8(0x020e), 0x01 },
+	{ CCI_REG8(0x020f), 0x00 },
+	{ CCI_REG8(0x0216), 0x00 },
+	{ CCI_REG8(0x0217), 0x00 },
+	{ CCI_REG8(0x0218), 0x01 },
+	{ CCI_REG8(0x0219), 0x00 },
+	{ CCI_REG8(0x313c), 0x00 },
+	{ CCI_REG8(0x313d), 0x00 },
+	{ CCI_REG8(0x313e), 0x01 },
+	{ CCI_REG8(0x313f), 0x00 },
+	{ CCI_REG8(0x30b4), 0x01 },
+	{ CCI_REG8(0x3066), 0x00 },
+	{ CCI_REG8(0x3067), 0x30 },
+	{ CCI_REG8(0x3068), 0x00 },
+	{ CCI_REG8(0x3069), 0x30 },
+	{ CCI_REG8(0x33d0), 0x00 },
+	{ CCI_REG8(0x33d1), 0x00 },
+	{ CCI_REG8(0x33d4), 0x01 },
+	{ CCI_REG8(0x33dc), 0x0a },
+	{ CCI_REG8(0x33dd), 0x0a },
+	{ CCI_REG8(0x33de), 0x0a },
+	{ CCI_REG8(0x33df), 0x0a },
+	{ CCI_REG8(0x3070), 0x01 },
+	{ CCI_REG8(0x3077), 0x01 },
+	{ CCI_REG8(0x3078), 0x30 },
+	{ CCI_REG8(0x3079), 0x01 },
+	{ CCI_REG8(0x307a), 0x30 },
+	{ CCI_REG8(0x307b), 0x01 },
+	{ CCI_REG8(0x3080), 0x02 },
+	{ CCI_REG8(0x3087), 0x02 },
+	{ CCI_REG8(0x3088), 0x30 },
+	{ CCI_REG8(0x3089), 0x02 },
+	{ CCI_REG8(0x308a), 0x30 },
+	{ CCI_REG8(0x308b), 0x02 },
+	{ CCI_REG8(0x3901), 0x2b },
+	{ CCI_REG8(0x3902), 0x00 },
+	{ CCI_REG8(0x3903), 0x12 },
+	{ CCI_REG8(0x3905), 0x2b },
+	{ CCI_REG8(0x3906), 0x01 },
+	{ CCI_REG8(0x3907), 0x12 },
+	{ CCI_REG8(0x3909), 0x2b },
+	{ CCI_REG8(0x390a), 0x02 },
+	{ CCI_REG8(0x390b), 0x12 },
+	{ CCI_REG8(0x3911), 0x00 },
+	{ CCI_REG8(0x0110), 0x00 },
+	{ CCI_REG8(0xec12), 0x01 },
+};
+
+static const struct cci_reg_sequence imx890_1296x736_regs[] = {
+	{ CCI_REG8(0x0112), 0x0a },
+	{ CCI_REG8(0x0113), 0x0a },
+	{ CCI_REG8(0x0114), 0x02 },
+	{ CCI_REG8(0x0342), 0x15 },
+	{ CCI_REG8(0x0343), 0xc0 },
+	{ CCI_REG8(0x0340), 0x03 },
+	{ CCI_REG8(0x0341), 0x2c },
+	{ CCI_REG8(0x0344), 0x00 },
+	{ CCI_REG8(0x0345), 0x00 },
+	{ CCI_REG8(0x0346), 0x06 },
+	{ CCI_REG8(0x0347), 0x40 },
+	{ CCI_REG8(0x0348), 0x1f },
+	{ CCI_REG8(0x0349), 0xff },
+	{ CCI_REG8(0x034a), 0x11 },
+	{ CCI_REG8(0x034b), 0xbf },
+	{ CCI_REG8(0x0900), 0x01 },
+	{ CCI_REG8(0x0901), 0x44 },
+	{ CCI_REG8(0x0902), 0x08 },
+	{ CCI_REG8(0x3005), 0x00 },
+	{ CCI_REG8(0x3120), 0x00 },
+	{ CCI_REG8(0x3121), 0x00 },
+	{ CCI_REG8(0x3200), 0x43 },
+	{ CCI_REG8(0x3201), 0x43 },
+	{ CCI_REG8(0x32d6), 0x00 },
+	{ CCI_REG8(0x0408), 0x01 },
+	{ CCI_REG8(0x0409), 0x78 },
+	{ CCI_REG8(0x040a), 0x00 },
+	{ CCI_REG8(0x040b), 0x00 },
+	{ CCI_REG8(0x040c), 0x05 },
+	{ CCI_REG8(0x040d), 0x10 },
+	{ CCI_REG8(0x040e), 0x02 },
+	{ CCI_REG8(0x040f), 0xe0 },
+	{ CCI_REG8(0x034c), 0x05 },
+	{ CCI_REG8(0x034d), 0x10 },
+	{ CCI_REG8(0x034e), 0x02 },
+	{ CCI_REG8(0x034f), 0xe0 },
+	{ CCI_REG8(0x0301), 0x05 },
+	{ CCI_REG8(0x0303), 0x02 },
+	{ CCI_REG8(0x0305), 0x03 },
+	{ CCI_REG8(0x0306), 0x00 },
+	{ CCI_REG8(0x0307), 0xd4 },
+	{ CCI_REG8(0x030b), 0x02 },
+	{ CCI_REG8(0x030d), 0x02 },
+	{ CCI_REG8(0x030e), 0x01 },
+	{ CCI_REG8(0x030f), 0x02 },
+	{ CCI_REG8(0x30cb), 0x00 },
+	{ CCI_REG8(0x30cc), 0x10 },
+	{ CCI_REG8(0x30cd), 0x00 },
+	{ CCI_REG8(0x30ce), 0x03 },
+	{ CCI_REG8(0x30cf), 0x00 },
+	{ CCI_REG8(0x319c), 0x00 },
+	{ CCI_REG8(0x3800), 0x00 },
+	{ CCI_REG8(0x3801), 0x00 },
+	{ CCI_REG8(0x3802), 0x04 },
+	{ CCI_REG8(0x3847), 0x03 },
+	{ CCI_REG8(0x38b0), 0x00 },
+	{ CCI_REG8(0x38b1), 0x00 },
+	{ CCI_REG8(0x38b2), 0x00 },
+	{ CCI_REG8(0x38b3), 0x00 },
+	{ CCI_REG8(0x38c4), 0x00 },
+	{ CCI_REG8(0x38c5), 0x00 },
+	{ CCI_REG8(0x38e0), 0x00 },
+	{ CCI_REG8(0x38e1), 0x00 },
+	{ CCI_REG8(0x8be4), 0x00 },
+	{ CCI_REG8(0x8be5), 0x00 },
+	{ CCI_REG8(0x3890), 0x00 },
+	{ CCI_REG8(0x3891), 0x00 },
+	{ CCI_REG8(0x3894), 0x00 },
+	{ CCI_REG8(0x3895), 0x00 },
+	{ CCI_REG8(0x4c3a), 0x02 },
+	{ CCI_REG8(0x4c3b), 0xd2 },
+	{ CCI_REG8(0x4c68), 0x04 },
+	{ CCI_REG8(0x4c69), 0x7e },
+	{ CCI_REG8(0x4cf8), 0x07 },
+	{ CCI_REG8(0x4cf9), 0x9e },
+	{ CCI_REG8(0x4db8), 0x08 },
+	{ CCI_REG8(0x4db9), 0x98 },
+	{ CCI_REG8(0x0224), 0x01 },
+	{ CCI_REG8(0x0225), 0xf4 },
+	{ CCI_REG8(0x313a), 0x01 },
+	{ CCI_REG8(0x313b), 0xf4 },
+	{ CCI_REG8(0x3803), 0x00 },
+	{ CCI_REG8(0x3804), 0x17 },
+	{ CCI_REG8(0x3805), 0xc0 },
+	{ CCI_REG8(0x020e), 0x01 },
+	{ CCI_REG8(0x020f), 0x00 },
+	{ CCI_REG8(0x0216), 0x00 },
+	{ CCI_REG8(0x0217), 0x00 },
+	{ CCI_REG8(0x0218), 0x01 },
+	{ CCI_REG8(0x0219), 0x00 },
+	{ CCI_REG8(0x313c), 0x00 },
+	{ CCI_REG8(0x313d), 0x00 },
+	{ CCI_REG8(0x313e), 0x01 },
+	{ CCI_REG8(0x313f), 0x00 },
+	{ CCI_REG8(0x30b4), 0x00 },
+	{ CCI_REG8(0x3066), 0x00 },
+	{ CCI_REG8(0x3067), 0x30 },
+	{ CCI_REG8(0x3068), 0x00 },
+	{ CCI_REG8(0x3069), 0x30 },
+	{ CCI_REG8(0x33d0), 0x00 },
+	{ CCI_REG8(0x33d1), 0x00 },
+	{ CCI_REG8(0x33d4), 0x01 },
+	{ CCI_REG8(0x33dc), 0x0a },
+	{ CCI_REG8(0x33dd), 0x0a },
+	{ CCI_REG8(0x33de), 0x0a },
+	{ CCI_REG8(0x33df), 0x0a },
+	{ CCI_REG8(0x3070), 0x01 },
+	{ CCI_REG8(0x3077), 0x01 },
+	{ CCI_REG8(0x3078), 0x30 },
+	{ CCI_REG8(0x3079), 0x01 },
+	{ CCI_REG8(0x307a), 0x30 },
+	{ CCI_REG8(0x307b), 0x01 },
+	{ CCI_REG8(0x3080), 0x02 },
+	{ CCI_REG8(0x3087), 0x02 },
+	{ CCI_REG8(0x3088), 0x30 },
+	{ CCI_REG8(0x3089), 0x02 },
+	{ CCI_REG8(0x308a), 0x30 },
+	{ CCI_REG8(0x308b), 0x02 },
+	{ CCI_REG8(0x3901), 0x2b },
+	{ CCI_REG8(0x3902), 0x00 },
+	{ CCI_REG8(0x3903), 0x12 },
+	{ CCI_REG8(0x3905), 0x2b },
+	{ CCI_REG8(0x3906), 0x01 },
+	{ CCI_REG8(0x3907), 0x12 },
+	{ CCI_REG8(0x3909), 0x2b },
+	{ CCI_REG8(0x390a), 0x02 },
+	{ CCI_REG8(0x390b), 0x12 },
+	{ CCI_REG8(0x3911), 0x00 },
+	{ CCI_REG8(0x0110), 0x00 },
+	{ CCI_REG8(0xec12), 0x00 },
+};
+
 static const struct imx890_mode imx890_modes[] = {
 	{
+		/* 2x2 binned, full field of view */
 		.width = 4096,
 		.height = 3072,
 		.fll = 3310,
 		.llp = 15616,
+		.pixel_rate = 1551360000,
 		.regs = imx890_4096x3072_regs,
 		.num_regs = ARRAY_SIZE(imx890_4096x3072_regs),
+	},
+	{
+		/* 2x2 binned, 16:9 crop */
+		.width = 4096,
+		.height = 2304,
+		.fll = 3168,
+		.llp = 15616,
+		.pixel_rate = 1484800000,
+		.regs = imx890_4096x2304_regs,
+		.num_regs = ARRAY_SIZE(imx890_4096x2304_regs),
+	},
+	{
+		/*
+		 * 4x4 binned, 16:9 crop. The stock table runs this mode at a
+		 * very high frame rate (FLL 812); default to 30 fps instead.
+		 */
+		.width = 1296,
+		.height = 736,
+		.fll = 12992,
+		.llp = 5568,
+		.pixel_rate = 2170880000,
+		.regs = imx890_1296x736_regs,
+		.num_regs = ARRAY_SIZE(imx890_1296x736_regs),
 	},
 };
 
@@ -1014,7 +1309,9 @@ struct imx890 {
 	struct media_pad pad;
 
 	struct v4l2_ctrl_handler ctrls;
+	struct v4l2_ctrl *pixel_rate;
 	struct v4l2_ctrl *vblank;
+	struct v4l2_ctrl *hblank;
 	struct v4l2_ctrl *exposure;
 
 	const struct imx890_mode *mode;
@@ -1092,19 +1389,22 @@ static int imx890_init_controls(struct imx890 *imx890)
 	if (ctrl)
 		ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 
-	v4l2_ctrl_new_std(hdl, &imx890_ctrl_ops, V4L2_CID_PIXEL_RATE,
-			  IMX890_PIXEL_RATE, IMX890_PIXEL_RATE, 1,
-			  IMX890_PIXEL_RATE);
+	imx890->pixel_rate = v4l2_ctrl_new_std(hdl, &imx890_ctrl_ops,
+					       V4L2_CID_PIXEL_RATE,
+					       IMX890_PIXEL_RATE_MIN,
+					       IMX890_PIXEL_RATE_MAX, 1,
+					       mode->pixel_rate);
 
 	imx890->vblank = v4l2_ctrl_new_std(hdl, &imx890_ctrl_ops,
 					   V4L2_CID_VBLANK, vblank,
 					   IMX890_FLL_MAX - mode->height, 1,
 					   vblank);
 
-	ctrl = v4l2_ctrl_new_std(hdl, &imx890_ctrl_ops, V4L2_CID_HBLANK,
-				 hblank, hblank, 1, hblank);
-	if (ctrl)
-		ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+	imx890->hblank = v4l2_ctrl_new_std(hdl, &imx890_ctrl_ops,
+					   V4L2_CID_HBLANK, hblank, hblank, 1,
+					   hblank);
+	if (imx890->hblank)
+		imx890->hblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 
 	imx890->exposure = v4l2_ctrl_new_std(hdl, &imx890_ctrl_ops,
 					     V4L2_CID_EXPOSURE,
@@ -1232,7 +1532,10 @@ static int imx890_set_format(struct v4l2_subdev *sd,
 			     struct v4l2_subdev_state *state,
 			     struct v4l2_subdev_format *fmt)
 {
+	struct imx890 *imx890 = to_imx890(sd);
 	const struct imx890_mode *mode;
+	u32 vblank, hblank, exposure_max;
+	int ret;
 
 	mode = v4l2_find_nearest_size(imx890_modes, ARRAY_SIZE(imx890_modes),
 				      width, height, fmt->format.width,
@@ -1240,7 +1543,36 @@ static int imx890_set_format(struct v4l2_subdev *sd,
 	imx890_fill_format(mode, &fmt->format);
 	*v4l2_subdev_state_get_format(state, 0) = fmt->format;
 
-	return 0;
+	if (fmt->which != V4L2_SUBDEV_FORMAT_ACTIVE)
+		return 0;
+
+	imx890->mode = mode;
+
+	ret = __v4l2_ctrl_s_ctrl_int64(imx890->pixel_rate, mode->pixel_rate);
+	if (ret)
+		return ret;
+
+	hblank = mode->llp - mode->width;
+	ret = __v4l2_ctrl_modify_range(imx890->hblank, hblank, hblank, 1,
+				       hblank);
+	if (ret)
+		return ret;
+
+	vblank = mode->fll - mode->height;
+	ret = __v4l2_ctrl_modify_range(imx890->vblank, vblank,
+				       IMX890_FLL_MAX - mode->height, 1,
+				       vblank);
+	if (ret)
+		return ret;
+
+	ret = __v4l2_ctrl_s_ctrl(imx890->vblank, vblank);
+	if (ret)
+		return ret;
+
+	exposure_max = mode->fll - IMX890_EXPOSURE_MARGIN;
+
+	return __v4l2_ctrl_modify_range(imx890->exposure, IMX890_EXPOSURE_MIN,
+					exposure_max, 1, exposure_max);
 }
 
 static int imx890_get_selection(struct v4l2_subdev *sd,
