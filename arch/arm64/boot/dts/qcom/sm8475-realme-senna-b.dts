@@ -908,9 +908,12 @@
 		pinctrl-0 = <&cam_uw_mclk_default>, <&cam_uw_reset_default>;
 		pinctrl-names = "default";
 
-		/* downstream sensor-position: roll 90, yaw 180 (back) */
+		/*
+		 * downstream sensor-position: roll 90, yaw 180 (back). The
+		 * image is upside down with rotation 90, so it is 270 here.
+		 */
 		orientation = <1>;
-		rotation = <90>;
+		rotation = <270>;
 
 		port {
 			/* sensor module: 4 lanes (0x0114 = 3), laneAssign 0x3210, D-PHY */
