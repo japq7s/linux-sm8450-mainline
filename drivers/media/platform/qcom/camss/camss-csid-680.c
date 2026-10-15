@@ -202,6 +202,9 @@ static void __csid_configure_rx(struct csid_device *csid,
 			<< CSI2_RX_CFG0_PHY_NUM_SEL;
 	}
 
+	if (phy->cphy)
+		val |= 1 << CSI2_RX_CFG0_PHY_TYPE_SEL;
+
 	writel(val, csid->base + CSID_CSI2_RX_CFG0);
 
 	val = CSI2_RX_CFG1_PACKET_ECC_CORRECTION_EN;
