@@ -857,6 +857,30 @@
 		compatible = "qcom,pm8010-rpmh-regulators";
 		qcom,pmic-id = "i";
 
+		/* main camera vdig (downstream L1I) */
+		vreg_l1i_1p1: ldo1 {
+			regulator-name = "vreg_l1i_1p1";
+			regulator-min-microvolt = <1104000>;
+			regulator-max-microvolt = <1104000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* main camera vana (downstream L3I) */
+		vreg_l3i_2p8: ldo3 {
+			regulator-name = "vreg_l3i_2p8";
+			regulator-min-microvolt = <2800000>;
+			regulator-max-microvolt = <2800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* main camera module supply (downstream L5I, cam_v_custom1) */
+		vreg_l5i_1p8: ldo5 {
+			regulator-name = "vreg_l5i_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
 		/* ultra wide camera vana (downstream L4I) */
 		vreg_l4i_2p8: ldo4 {
 			regulator-name = "vreg_l4i_2p8";
@@ -882,11 +906,56 @@
 				remote-endpoint = <&cam_uw_ep>;
 			};
 		};
+
+		port@3 {
+			csiphy3_ep: endpoint {
+				data-lanes = <0 1 2>;
+				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
+				remote-endpoint = <&cam_main_ep>;
+			};
+		};
 	};
 };
 
 &cci0 {
 	status = "okay";
+};
+
+/* downstream cam-sensor0 (sunny/qtech imx890): CCI0 master 0, CSIPHY3, MCLK1 */
+&cci0_i2c0 {
+	/* chip id 0x0890 answers at 0x10; module EEPROMs at 0x50 and 0x58 */
+	camera@10 {
+		compatible = "sony,imx890";
+		reg = <0x10>;
+
+		vio-supply = <&vreg_l2c_1p8>;
+		vana-supply = <&vreg_l3i_2p8>;
+		vdig-supply = <&vreg_l1i_1p1>;
+		vcustom-supply = <&vreg_l5i_1p8>;
+
+		clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clock-rates = <19200000>;
+
+		reset-gpios = <&tlmm 120 GPIO_ACTIVE_LOW>;
+
+		pinctrl-0 = <&cam_main_mclk_default>, <&cam_main_reset_default>;
+		pinctrl-names = "default";
+
+		/* downstream sensor-position: roll 90, yaw 180 like the ultra wide */
+		orientation = <1>;
+		rotation = <270>;
+
+		port {
+			/* sensor module: 3 C-PHY trios (0x0114 = 2, 0x0111 = 3) */
+			cam_main_ep: endpoint {
+				data-lanes = <1 2 3>;
+				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
+				link-frequencies = /bits/ 64 <1238400000>;
+				remote-endpoint = <&csiphy3_ep>;
+			};
+		};
+	};
 };
 
 /* downstream cam-sensor1 (sunny imx355): CCI0 master 1, CSIPHY1, MCLK2 */
@@ -1427,6 +1496,20 @@
 		function = "gpio";
 		drive-strength = <8>;
 		bias-pull-up;
+	};
+
+	cam_main_mclk_default: cam-main-mclk-default-state {
+		pins = "gpio101";
+		function = "cam_mclk";
+		drive-strength = <6>;
+		bias-disable;
+	};
+
+	cam_main_reset_default: cam-main-reset-default-state {
+		pins = "gpio120";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
 	};
 
 	cam_uw_mclk_default: cam-uw-mclk-default-state {
