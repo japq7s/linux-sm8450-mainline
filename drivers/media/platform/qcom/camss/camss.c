@@ -5078,13 +5078,16 @@ static int camss_parse_endpoint_node(struct device *dev,
 		return ret;
 
 	/*
-	 * Most SoCs support both D-PHY and C-PHY standards, but currently only
-	 * D-PHY is supported in the driver.
+	 * Most SoCs support both D-PHY and C-PHY standards, the CSIPHY driver
+	 * implements C-PHY for some of them only.
 	 */
-	if (vep.bus_type != V4L2_MBUS_CSI2_DPHY) {
+	if (vep.bus_type != V4L2_MBUS_CSI2_DPHY &&
+	    vep.bus_type != V4L2_MBUS_CSI2_CPHY) {
 		dev_err(dev, "Unsupported bus type %d\n", vep.bus_type);
 		return -EINVAL;
 	}
+
+	lncfg->cphy = vep.bus_type == V4L2_MBUS_CSI2_CPHY;
 
 	csd->interface.csiphy_id = vep.base.port;
 
