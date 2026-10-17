@@ -41,10 +41,19 @@
 #define IMX890_EXPOSURE_MIN		8
 #define IMX890_EXPOSURE_MARGIN		48
 
+/*
+ * The analogue gain register holds a 14-bit code, gain = 16384 / (16384 -
+ * code), up to 15360 (16x); measured on the sensor, codes of the usual
+ * 1024 / (1024 - code) form give at most 1.06x. The control is linear, in
+ * 1/256 steps (256 = 1x), so that a relative change of the control is the
+ * same change of the image brightness over the whole range.
+ */
 #define IMX890_REG_ANALOG_GAIN		CCI_REG16(0x0204)
-#define IMX890_ANA_GAIN_MIN		0
-#define IMX890_ANA_GAIN_MAX		960	/* 16x: 1024 / (1024 - 960) */
-#define IMX890_ANA_GAIN_DEFAULT		0
+#define IMX890_ANA_GAIN_UNIT		256
+#define IMX890_ANA_GAIN_CODE_RANGE	16384
+#define IMX890_ANA_GAIN_MIN		IMX890_ANA_GAIN_UNIT
+#define IMX890_ANA_GAIN_MAX		(16 * IMX890_ANA_GAIN_UNIT)
+#define IMX890_ANA_GAIN_DEFAULT		IMX890_ANA_GAIN_UNIT
 
 #define IMX890_EXTCLK_RATE		19200000
 
@@ -1350,7 +1359,10 @@ static int imx890_set_ctrl(struct v4l2_ctrl *ctrl)
 		cci_write(imx890->regmap, IMX890_REG_EXPOSURE, ctrl->val, &ret);
 		break;
 	case V4L2_CID_ANALOGUE_GAIN:
-		cci_write(imx890->regmap, IMX890_REG_ANALOG_GAIN, ctrl->val,
+		cci_write(imx890->regmap, IMX890_REG_ANALOG_GAIN,
+			  IMX890_ANA_GAIN_CODE_RANGE -
+			  DIV_ROUND_CLOSEST(IMX890_ANA_GAIN_CODE_RANGE *
+					    IMX890_ANA_GAIN_UNIT, ctrl->val),
 			  &ret);
 		break;
 	default:
