@@ -19,6 +19,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
 
@@ -1324,6 +1325,10 @@ struct imx890 {
 	struct v4l2_ctrl *exposure;
 
 	const struct imx890_mode *mode;
+
+	/* focus actuator (lens-focus), powered only while streaming */
+	struct device *lens;
+	bool lens_on;
 };
 
 static inline struct imx890 *to_imx890(struct v4l2_subdev *sd)
@@ -1455,6 +1460,37 @@ static void imx890_fill_format(const struct imx890_mode *mode,
 	fmt->xfer_func = V4L2_XFER_FUNC_NONE;
 }
 
+/*
+ * The focus actuator is a separate I2C device. Userspace (libcamera) keeps
+ * its subdev open for as long as it runs, so the lens is powered here, while
+ * the sensor streams, and not on open. A lens that fails to power up only
+ * costs focusing, so the stream goes on without it.
+ */
+static void imx890_lens_power(struct imx890 *imx890, bool on)
+{
+	int ret;
+
+	if (!imx890->lens || imx890->lens_on == on)
+		return;
+
+	if (!on) {
+		pm_runtime_put(imx890->lens);
+		imx890->lens_on = false;
+		return;
+	}
+
+	ret = pm_runtime_resume_and_get(imx890->lens);
+	if (ret) {
+		/* -EACCES: no driver bound to the lens */
+		if (ret != -EACCES)
+			dev_warn(imx890->dev, "failed to power the lens: %d\n",
+				 ret);
+		return;
+	}
+
+	imx890->lens_on = true;
+}
+
 static int imx890_enable_streams(struct v4l2_subdev *sd,
 				 struct v4l2_subdev_state *state, u32 pad,
 				 u64 streams_mask)
@@ -1466,6 +1502,8 @@ static int imx890_enable_streams(struct v4l2_subdev *sd,
 	ret = pm_runtime_resume_and_get(imx890->dev);
 	if (ret)
 		return ret;
+
+	imx890_lens_power(imx890, true);
 
 	ret = cci_multi_reg_write(imx890->regmap, imx890_init_regs,
 				  ARRAY_SIZE(imx890_init_regs), NULL);
@@ -1493,6 +1531,7 @@ static int imx890_enable_streams(struct v4l2_subdev *sd,
 	return 0;
 
 err_put:
+	imx890_lens_power(imx890, false);
 	pm_runtime_put(imx890->dev);
 	return ret;
 }
@@ -1507,6 +1546,7 @@ static int imx890_disable_streams(struct v4l2_subdev *sd,
 	ret = cci_write(imx890->regmap, IMX890_REG_MODE_SELECT,
 			IMX890_MODE_STANDBY, NULL);
 
+	imx890_lens_power(imx890, false);
 	pm_runtime_put(imx890->dev);
 
 	return ret;
@@ -1733,6 +1773,32 @@ out:
 	return ret;
 }
 
+static void imx890_put_lens(void *data)
+{
+	put_device(data);
+}
+
+static int imx890_get_lens(struct imx890 *imx890)
+{
+	struct device_node *np;
+	struct i2c_client *lens;
+
+	np = of_parse_phandle(imx890->dev->of_node, "lens-focus", 0);
+	if (!np)
+		return 0;
+
+	lens = of_find_i2c_device_by_node(np);
+	of_node_put(np);
+	if (!lens)
+		return dev_err_probe(imx890->dev, -EPROBE_DEFER,
+				     "lens-focus device not found\n");
+
+	imx890->lens = &lens->dev;
+
+	return devm_add_action_or_reset(imx890->dev, imx890_put_lens,
+					imx890->lens);
+}
+
 static int imx890_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -1780,6 +1846,10 @@ static int imx890_probe(struct i2c_client *client)
 	if (IS_ERR(imx890->reset_gpio))
 		return dev_err_probe(dev, PTR_ERR(imx890->reset_gpio),
 				     "failed to get reset gpio\n");
+
+	ret = imx890_get_lens(imx890);
+	if (ret)
+		return ret;
 
 	ret = imx890_power_on(dev);
 	if (ret)
