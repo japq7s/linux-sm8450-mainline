@@ -176,7 +176,7 @@ static int ak7375_set_ctrl(struct v4l2_ctrl *ctrl)
 
 	ret = ak7375_move(dev_vcm, ctrl->val);
 
-	pm_runtime_put(dev);
+	pm_runtime_put_autosuspend(dev);
 
 	return ret;
 }
@@ -254,6 +254,9 @@ static int ak7375_probe(struct i2c_client *client)
 		goto err_cleanup;
 
 	pm_runtime_set_active(&client->dev);
+	/* Survive the stream restart of a still capture (see the sensor). */
+	pm_runtime_set_autosuspend_delay(&client->dev, 2000);
+	pm_runtime_use_autosuspend(&client->dev);
 	pm_runtime_enable(&client->dev);
 	pm_runtime_idle(&client->dev);
 
@@ -272,6 +275,7 @@ static void ak7375_remove(struct i2c_client *client)
 	struct ak7375_device *ak7375_dev = sd_to_ak7375_vcm(sd);
 
 	ak7375_subdev_cleanup(ak7375_dev);
+	pm_runtime_dont_use_autosuspend(&client->dev);
 	pm_runtime_disable(&client->dev);
 	pm_runtime_set_suspended(&client->dev);
 }
