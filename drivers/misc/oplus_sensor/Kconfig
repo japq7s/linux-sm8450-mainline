@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config OPLUS_SENSOR_DEVINFO
+	bool "OPLUS sensor information for the SLPI"
+	depends on QCOM_SMEM && OF
+	help
+	  The sensor drivers of the OPLUS SLPI firmware read the sensor
+	  configuration from the SMEM_SENSOR entry, which this driver fills
+	  from the oplus,sensor-devinfo devicetree node. It must run before
+	  the SLPI boots, so it can only be built in.
