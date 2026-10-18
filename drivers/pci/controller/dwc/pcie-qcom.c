@@ -96,6 +96,12 @@
 #define SLV_ACLK_CGC_DIS			BIT(9)
 #define CORE_CLK_CGC_DIS			BIT(6)
 #define AUX_PWR_DET				BIT(4)
+/*
+ * Cleared by the downstream pci-msm driver when it enables L1 PM substates,
+ * unless the aux clock runs synchronous to the core clock ("Enable the AUX
+ * Clock and the Core Clk to be synchronous for L1ss").
+ */
+#define L1SS_AUX_CLK_ASYNC_DIS			BIT(3)
 #define L23_CLK_RMV_DIS				BIT(2)
 #define L1_CLK_RMV_DIS				BIT(1)
 
@@ -1562,10 +1568,31 @@ static const struct qcom_pcie_ops ops_2_7_0 = {
 };
 
 /* Qcom IP rev.: 1.9.0 */
+/*
+ * The 1.9.0 cores run the aux clock (19.2 MHz) asynchronous to the core
+ * clock, which is gated in L1.2: tell the core so, as the downstream driver
+ * does when it enables L1 PM substates.
+ */
+static int qcom_pcie_post_init_1_9_0(struct qcom_pcie *pcie)
+{
+	u32 val;
+	int ret;
+
+	ret = qcom_pcie_post_init_2_7_0(pcie);
+	if (ret)
+		return ret;
+
+	val = readl(pcie->parf + PARF_SYS_CTRL);
+	val &= ~L1SS_AUX_CLK_ASYNC_DIS;
+	writel(val, pcie->parf + PARF_SYS_CTRL);
+
+	return 0;
+}
+
 static const struct qcom_pcie_ops ops_1_9_0 = {
 	.get_resources = qcom_pcie_get_resources_2_7_0,
 	.init = qcom_pcie_init_2_7_0,
-	.post_init = qcom_pcie_post_init_2_7_0,
+	.post_init = qcom_pcie_post_init_1_9_0,
 	.host_post_init = qcom_pcie_host_post_init_2_7_0,
 	.deinit = qcom_pcie_deinit_2_7_0,
 	.ltssm_enable = qcom_pcie_2_3_2_ltssm_enable,
@@ -2120,6 +2147,15 @@ static int qcom_pcie_parse_legacy_binding(struct qcom_pcie *pcie)
 	perst = devm_kzalloc(dev, sizeof(*perst), GFP_KERNEL);
 	if (!perst)
 		return -ENOMEM;
+
+	/* The Root Port node may still describe the L1SS T_POWER_ON. */
+	for_each_available_child_of_node_scoped(dev->of_node, of_port) {
+		if (!of_node_is_type(of_port, "pci"))
+			continue;
+		of_property_read_u32(of_port, "t-power-on-us",
+				     &port->l1ss_t_power_on);
+		break;
+	}
 
 	port->phy = phy;
 	INIT_LIST_HEAD(&port->list);
