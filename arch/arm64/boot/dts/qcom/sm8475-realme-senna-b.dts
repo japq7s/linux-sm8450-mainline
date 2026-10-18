@@ -1862,3 +1862,143 @@
 	};
 };
 
+/*
+ * Sensor configuration for the OPLUS sensor drivers on the SLPI, written to
+ * SMEM by drivers/misc/oplus_sensor (values from the stock devicetree).
+ */
+/ {
+	sensor-devinfo {
+		compatible = "oplus,sensor-devinfo";
+		als-row-coe = <0x8c>;
+
+		gsensor-0 {
+			sensor-name = <0x40>;
+			sensor-index = <0x00>;
+			sensor-type = <0x00>;
+			use-sois = <0x00>;
+		};
+
+		gsensor-1 {
+			sensor-name = <0x20>;
+			sensor-index = <0x00>;
+			sensor-type = <0x00>;
+			use-sois = <0x01>;
+		};
+
+		msensor-0 {
+			sensor-name = <0x01>;
+			sensor-direction = <0x00>;
+			sensor-index = <0x00>;
+			sensor-type = <0x02>;
+			parameter-number = <0x12>;
+			soft-mag-parameter = <0x2610 0x00 0x8b8 0x00 0xbd 0x00 0x3ab 0x00 0x25ae 0x00 0x149 0x01 0x16d 0x00 0x6a 0x01 0x2d05 0x00>;
+		};
+
+		lsensor-0 {
+			sensor-name = <0x02>;
+			sensor-index = <0x00>;
+			sensor-type = <0x03>;
+			bus-number = <0x02>;
+			irq-number = <0x0e>;
+			als-type = <0x02>;
+			is-unit-device = <0x01>;
+			is-als-dri = <0x01>;
+			als-factor = <0x8c>;
+			is_als_initialed = <0x00>;
+			als_buffer_length = <0x0a>;
+			normalization_value = <0x225>;
+			use_lb_algo = <0x00>;
+			lcd_type = <0x00>;
+		};
+
+		psensor-0 {
+			sensor-name = <0x02>;
+			sensor-index = <0x00>;
+			sensor-type = <0x04>;
+			bus-number = <0x02>;
+			irq-number = <0x0e>;
+			ps-type = <0x01>;
+			parameter-number = <0x00>;
+			sensor-reg = <0x01 0x31 0xdb 0x00>;
+			low_step = <0x12c>;
+			high_step = <0x190>;
+			low_limit = <0x190>;
+			high_limit = <0x258>;
+			dirty_low_step = <0xc8>;
+			dirty_high_step = <0xfa>;
+			ps_dirty_limit = <0x3fc>;
+			ps_ir_limit = <0x1f4>;
+			ps_adjust_min = <0x00>;
+			ps_adjust_max = <0x258>;
+			sampling_count = <0x05>;
+			step_max = <0x190>;
+			step_min = <0x64>;
+			step_div = <0x5dc>;
+			anti_shake_delta = <0x46>;
+			dynamic_cali_max = <0x400>;
+			raw2offset_radio = <0x5140>;
+			offset_max = <0xfa>;
+			offset_range_min = <0xffffff01>;
+			offset_range_max = <0xff>;
+			force_cali_limit = <0x7d0>;
+			cali_jitter_limit = <0x14>;
+			cal_offset_margin = <0x50>;
+		};
+
+		ssensor-0 {
+			sensor-name = <0x01>;
+			sensor-index = <0x00>;
+			sensor-type = <0x05>;
+		};
+
+		cctsensor-0 {
+			sensor-name = <0x01>;
+			sensor-index = <0x00>;
+			sensor-type = <0x06>;
+			bus-number = <0x01>;
+			publish-sensors = <0x07>;
+			is-ch-dri = <0x00>;
+			timer-size = <0x19>;
+			fac-cali-sensor = <0x02>;
+		};
+
+		cctrsensor-0 {
+			decoupled-driver = <0x01>;
+			sensor-name = <0x01>;
+			sensor-index = <0x00>;
+			sensor-type = <0x07>;
+			bus-number = <0x04>;
+			publish-sensors = <0x07>;
+			is-ch-dri = <0x00>;
+			timer-size = <0x19>;
+			fac-cali-sensor = <0x02>;
+			para-matrix = <0x01>;
+		};
+
+		pickup_detect {
+			sensor-type = <0x00>;
+			is-virtual-sensor;
+			is-need-prox = <0x01>;
+			prox-type = <0x00>;
+		};
+
+		lux_aod {
+			sensor-type = <0x01>;
+			is-virtual-sensor;
+			thrd-low = <0x0c>;
+			thrd-high = <0x32>;
+			als-type = <0x00>;
+		};
+
+		fp_display {
+			sensor-type = <0x03>;
+			is-virtual-sensor;
+			prox-type = <0x00>;
+		};
+
+		free_fall {
+			sensor-type = <0x04>;
+			is-virtual-sensor;
+		};
+	};
+};
