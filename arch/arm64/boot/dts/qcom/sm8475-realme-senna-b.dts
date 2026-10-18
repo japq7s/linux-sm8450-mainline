@@ -1169,6 +1169,12 @@
 };
 
 &pcieport0 {
+	/*
+	 * The WCN6855 and the root port advertise T_POWER_ON 0; the downstream
+	 * kernel ran L1.2 with 10 us (L1SS_CTL2 0x28 on both ends).
+	 */
+	t-power-on-us = <10>;
+
 	wifi@0 {
 		compatible = "pci17cb,1103";
 		reg = <0x10000 0x0 0x0 0x0 0x0>;
@@ -1855,3 +1861,4 @@
 		};
 	};
 };
+
