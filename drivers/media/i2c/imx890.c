@@ -1474,7 +1474,12 @@ static void imx890_lens_power(struct imx890 *imx890, bool on)
 		return;
 
 	if (!on) {
-		pm_runtime_put(imx890->lens);
+		/*
+		 * Delayed: applications restart the stream for a capture, and
+		 * powering the lens down parks it at infinity, so the first
+		 * frames after the restart would be taken while it moves back.
+		 */
+		pm_runtime_put_autosuspend(imx890->lens);
 		imx890->lens_on = false;
 		return;
 	}
