@@ -94,6 +94,8 @@ struct ak7375_device {
 
 	/* active or standby mode */
 	bool active;
+	/* last position written to the actuator */
+	int pos;
 };
 
 static inline struct ak7375_device *to_ak7375_vcm(struct v4l2_ctrl *ctrl)
@@ -128,10 +130,40 @@ static int ak7375_i2c_write(struct ak7375_device *ak7375,
 	return 0;
 }
 
+/*
+ * Move the lens to the target position in units of ctrl_steps. A direct
+ * jump over a large part of the range makes the voice coil hit its end
+ * stop, audible as a click.
+ */
+static int ak7375_move(struct ak7375_device *ak7375, int target)
+{
+	const struct ak73xx_chipdef *cdef = ak7375->cdef;
+	int pos = ak7375->pos;
+	int ret;
+
+	while (pos != target) {
+		if (target > pos)
+			pos = min(pos + cdef->ctrl_steps, target);
+		else
+			pos = max(pos - cdef->ctrl_steps, target);
+
+		ret = ak7375_i2c_write(ak7375, cdef->reg_position,
+				       pos << cdef->shift_pos, 2);
+		if (ret)
+			return ret;
+		ak7375->pos = pos;
+
+		if (pos != target)
+			usleep_range(cdef->ctrl_delay_us,
+				     cdef->ctrl_delay_us + 10);
+	}
+
+	return 0;
+}
+
 static int ak7375_set_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct ak7375_device *dev_vcm = to_ak7375_vcm(ctrl);
-	const struct ak73xx_chipdef *cdef = dev_vcm->cdef;
 	struct device *dev = dev_vcm->sd.dev;
 	int ret;
 
@@ -142,8 +174,7 @@ static int ak7375_set_ctrl(struct v4l2_ctrl *ctrl)
 	if (pm_runtime_get_if_active(dev) <= 0)
 		return 0;
 
-	ret = ak7375_i2c_write(dev_vcm, cdef->reg_position,
-			       ctrl->val << cdef->shift_pos, 2);
+	ret = ak7375_move(dev_vcm, ctrl->val);
 
 	pm_runtime_put(dev);
 
@@ -255,20 +286,14 @@ static int __maybe_unused ak7375_vcm_suspend(struct device *dev)
 	struct v4l2_subdev *sd = dev_get_drvdata(dev);
 	struct ak7375_device *ak7375_dev = sd_to_ak7375_vcm(sd);
 	const struct ak73xx_chipdef *cdef = ak7375_dev->cdef;
-	int ret, val;
+	int ret;
 
 	if (!ak7375_dev->active)
 		return 0;
 
-	for (val = ak7375_dev->focus->val & ~(cdef->ctrl_steps - 1);
-	     val >= 0; val -= cdef->ctrl_steps) {
-		ret = ak7375_i2c_write(ak7375_dev, cdef->reg_position,
-				       val << cdef->shift_pos, 2);
-		if (ret)
-			dev_err_once(dev, "%s I2C failure: %d\n",
-				     __func__, ret);
-		usleep_range(cdef->ctrl_delay_us, cdef->ctrl_delay_us + 10);
-	}
+	ret = ak7375_move(ak7375_dev, 0);
+	if (ret)
+		dev_err(dev, "%s I2C failure: %d\n", __func__, ret);
 
 	if (cdef->has_standby) {
 		ret = ak7375_i2c_write(ak7375_dev, cdef->reg_cont,
@@ -298,7 +323,7 @@ static int __maybe_unused ak7375_vcm_resume(struct device *dev)
 	struct v4l2_subdev *sd = dev_get_drvdata(dev);
 	struct ak7375_device *ak7375_dev = sd_to_ak7375_vcm(sd);
 	const struct ak73xx_chipdef *cdef = ak7375_dev->cdef;
-	int ret, val;
+	int ret;
 
 	if (ak7375_dev->active)
 		return 0;
@@ -320,16 +345,11 @@ static int __maybe_unused ak7375_vcm_resume(struct device *dev)
 		return ret;
 	}
 
-	for (val = ak7375_dev->focus->val % cdef->ctrl_steps;
-	     val <= ak7375_dev->focus->val;
-	     val += cdef->ctrl_steps) {
-		ret = ak7375_i2c_write(ak7375_dev, cdef->reg_position,
-				       val << cdef->shift_pos, 2);
-		if (ret)
-			dev_err_ratelimited(dev, "%s I2C failure: %d\n",
-						__func__, ret);
-		usleep_range(cdef->ctrl_delay_us, cdef->ctrl_delay_us + 10);
-	}
+	/* The lens rests at position 0 after power up. */
+	ak7375_dev->pos = 0;
+	ret = ak7375_move(ak7375_dev, ak7375_dev->focus->val);
+	if (ret)
+		dev_err(dev, "%s I2C failure: %d\n", __func__, ret);
 
 	ak7375_dev->active = true;
 
