@@ -870,6 +870,23 @@ static int msm_video_init_format(struct camss_video *video)
 }
 
 /*
+ * The format of a metadata output node is fixed by its producer, so there is
+ * nothing to match against the sink pad.
+ */
+static int video_meta_out_link_validate(struct media_link *link)
+{
+	struct video_device *vdev =
+		media_entity_to_video_device(link->source->entity);
+	struct camss_video *video = video_get_drvdata(vdev);
+
+	return video->active_fmt.fmt.meta.dataformat ? 0 : -EPIPE;
+}
+
+static const struct media_entity_operations msm_video_meta_out_entity_ops = {
+	.link_validate = video_meta_out_link_validate,
+};
+
+/*
  * msm_video_register - Register a video device node
  * @video: struct camss_video
  * @v4l2_dev: V4L2 device
@@ -944,6 +961,7 @@ int msm_video_register(struct camss_video *video, struct v4l2_device *v4l2_dev,
 		vdev->device_caps = V4L2_CAP_META_OUTPUT | V4L2_CAP_STREAMING |
 				    V4L2_CAP_IO_MC;
 		vdev->ioctl_ops = &msm_vid_meta_out_ioctl_ops;
+		vdev->entity.ops = &msm_video_meta_out_entity_ops;
 	} else if (meta) {
 		vdev->device_caps = V4L2_CAP_META_CAPTURE | V4L2_CAP_STREAMING |
 				    V4L2_CAP_IO_MC;
