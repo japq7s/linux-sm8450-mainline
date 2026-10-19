@@ -1558,11 +1558,19 @@ static int vfe_check_clock_rates(struct vfe_device *vfe)
 			 * top level, as the clock rounds it (727 MHz for 785 MHz
 			 * on SM8450).
 			 */
-			if (pix_line && min_rate > clock->freq[clock->nfreqs - 1]) {
+			if (pix_line) {
 				long top = clk_round_rate(clock->clk,
 							  clock->freq[clock->nfreqs - 1]);
+				u64 cap = top > 0 ? top : clock->freq[clock->nfreqs - 1];
 
-				min_rate = top > 0 ? top : clock->freq[clock->nfreqs - 1];
+				/*
+				 * Against the rounded rate: a pixel rate
+				 * between it and the top level (779 MHz for
+				 * the IMX890 4096x2304 mode) is set to the top
+				 * level and must pass as well.
+				 */
+				if (min_rate > cap)
+					min_rate = cap;
 			}
 
 			rate = clk_get_rate(clock->clk);
