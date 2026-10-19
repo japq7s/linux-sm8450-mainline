@@ -1405,6 +1405,7 @@ static u32 vfe_pix_ppc(struct vfe_device *vfe)
 static int vfe_set_clock_rates(struct vfe_device *vfe)
 {
 	struct device *dev = vfe->camss->dev;
+	bool pix_line = false;
 	u64 pixel_clock[VFE_LINE_NUM_MAX];
 	int i, j;
 	int ret;
@@ -1429,6 +1430,7 @@ static int vfe_set_clock_rates(struct vfe_device *vfe)
 
 				if (vfe->line[j].is_pix) {
 					tmp = div_u64(pixel_clock[j], vfe_pix_ppc(vfe));
+					pix_line |= pixel_clock[j] != 0;
 				} else {
 					struct vfe_line *l = &vfe->line[j];
 
@@ -1447,6 +1449,21 @@ static int vfe_set_clock_rates(struct vfe_device *vfe)
 			for (j = 0; j < clock->nfreqs; j++)
 				if (min_rate < clock->freq[j])
 					break;
+
+			/*
+			 * The sensor pixel rate counts the horizontal blanking.
+			 * A sensor with a long line (IMX890: 15616 pixel line for
+			 * a 4096 or 1296 pixel image) asks for more than the
+			 * pixel line's real input, which arrives at the CSI-2
+			 * link rate and is buffered by the CSID. Run the pixel
+			 * line at the highest rate instead of refusing it.
+			 */
+			if (j == clock->nfreqs && pix_line) {
+				dev_warn_once(dev,
+					      "VFE%u: pixel rate needs %llu Hz, using the highest VFE clock\n",
+					      vfe->id, min_rate);
+				j = clock->nfreqs - 1;
+			}
 
 			if (j == clock->nfreqs) {
 				dev_err(dev,
@@ -1486,6 +1503,7 @@ static int vfe_set_clock_rates(struct vfe_device *vfe)
  */
 static int vfe_check_clock_rates(struct vfe_device *vfe)
 {
+	bool pix_line = false;
 	u64 pixel_clock[VFE_LINE_NUM_MAX];
 	int i, j;
 	int ret;
@@ -1510,6 +1528,7 @@ static int vfe_check_clock_rates(struct vfe_device *vfe)
 
 				if (vfe->line[j].is_pix) {
 					tmp = div_u64(pixel_clock[j], vfe_pix_ppc(vfe));
+					pix_line |= pixel_clock[j] != 0;
 				} else {
 					struct vfe_line *l = &vfe->line[j];
 
@@ -1524,6 +1543,10 @@ static int vfe_check_clock_rates(struct vfe_device *vfe)
 			}
 
 			camss_add_clock_margin(&min_rate);
+
+			/* see vfe_set_clock_rates(): the pixel line runs at the top rate */
+			if (pix_line && min_rate > clock->freq[clock->nfreqs - 1])
+				min_rate = clock->freq[clock->nfreqs - 1];
 
 			rate = clk_get_rate(clock->clk);
 			if (rate < min_rate)
