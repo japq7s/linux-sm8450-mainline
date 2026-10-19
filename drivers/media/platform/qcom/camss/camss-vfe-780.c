@@ -250,12 +250,9 @@ static inline void vfe_reg_update_clear(struct vfe_device *vfe,
  */
 static const struct vfe_pp_desc *vfe_pp_desc(struct vfe_device *vfe)
 {
-	/*
-	 * SM8450 (IFE 680): same CLC chain, TOP and bus layout as the 780 in
-	 * the downstream headers; module layout unverified, start from 780.
-	 */
-	if (vfe->camss->res->version == CAMSS_8550 ||
-	    vfe->camss->res->version == CAMSS_8450)
+	if (vfe->camss->res->version == CAMSS_8450)
+		return &vfe_pp_desc_680;
+	if (vfe->camss->res->version == CAMSS_8550)
 		return &vfe_pp_desc_780;
 
 	return &vfe_pp_desc_880;

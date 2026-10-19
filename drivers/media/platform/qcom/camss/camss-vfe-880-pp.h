@@ -13,8 +13,10 @@ struct vfe_pp_desc {
 	u32 wb_gain;	/* WB gain register value for full scale */
 	u8 wb_gain_shift;	/* position of the 15uQ10 gain field */
 	bool demux_bls;	/* subtract the black level in demux + BLS */
+	bool wb_clamp;	/* the WB clamp resets to a value that clips green */
 };
 
+extern const struct vfe_pp_desc vfe_pp_desc_680;
 extern const struct vfe_pp_desc vfe_pp_desc_780;
 extern const struct vfe_pp_desc vfe_pp_desc_880;
 
