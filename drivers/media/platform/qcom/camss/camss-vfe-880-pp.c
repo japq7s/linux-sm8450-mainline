@@ -84,6 +84,15 @@
 #define IFE_COLOR_XFORM_COLOR_XFORM_CH2_SUBOFFSET_CFG            0x061a4
 #define IFE_COLOR_XFORM_COLOR_XFORM_CH2_CLAMP0_CFG               0x061a8
 #define IFE_COLOR_XFORM_COLOR_XFORM_CH2_CLAMP1_CFG               0x061ac
+#define IFE_DOWNSCALE_MN_Y_VID_OUT_MODULE_CFG                    0x09860
+#define IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_CFG            0x09864
+#define IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_IMAGE_SIZE_CFG 0x09868
+#define IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_H_CFG          0x0986c
+#define IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_H_PHASE_CFG    0x09870
+#define IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_V_CFG          0x09874
+#define IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_V_PHASE_CFG    0x09878
+#define IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_LINE_END_CFG   0x0987c
+#define IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_PIXEL_END_CFG  0x09880
 #define IFE_DOWNSCALE_MN_C_VID_OUT_MODULE_CFG                    0x09a60
 #define IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_CFG            0x09a64
 #define IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_IMAGE_SIZE_CFG 0x09a68
@@ -91,7 +100,16 @@
 #define IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_H_PHASE_CFG    0x09a70
 #define IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_V_CFG          0x09a74
 #define IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_V_PHASE_CFG    0x09a78
+#define IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_LINE_END_CFG   0x09a7c
+#define IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_PIXEL_END_CFG  0x09a80
+/* scale factor input / output in Q21, with the enables of the camera stack */
+#define		IFE_DOWNSCALE_MN_STEP(in, out)	(0xc0000000 | \
+					 (u32)div_u64((u64)(in) << 21, (out)))
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_MODULE_CFG 0x09c60
+#define		IFE_CROP_RND_CLAMP_CROP_EN			BIT(9)
+#define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_CROP_LINE_CFG 0x09c68
+#define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_CROP_PIXEL_CFG 0x09c6c
+#define		IFE_CROP_RND_CLAMP_RANGE(first, n)	((first) << 16 | ((first) + (n) - 1))
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_CH0_CLAMP_MIN 0x09c70
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_CH0_ROUNDING_CFG 0x09c74
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_CH1_CLAMP_MIN 0x09c78
@@ -102,6 +120,8 @@
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_CH1_CLAMP_MAX 0x09c8c
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_CH2_CLAMP_MAX 0x09c90
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_MODULE_CFG 0x09e60
+#define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_CROP_LINE_CFG 0x09e68
+#define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_CROP_PIXEL_CFG 0x09e6c
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_CH0_CLAMP_MIN 0x09e70
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_CH0_ROUNDING_CFG 0x09e74
 #define IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_CH1_CLAMP_MIN 0x09e78
@@ -319,16 +339,46 @@ static void vfe_setup_core_config(struct vfe_device *vfe)
 	writel_relaxed(0x00006000, vfe->base + IFE_TOP_CORE_CFG_0);
 }
 
-/* Chroma 2:1 for NV12 */
-static void vfe_setup_chroma_downscale_nv12(struct vfe_device *vfe, u32 w, u32 h)
+/*
+ * VID path MN downscalers: luma from the frame entering the line to the
+ * compose size, chroma 2:1 further for NV12. Without scaling the luma
+ * scaler stays bypassed and the chroma one only halves, as before.
+ */
+static void vfe_setup_vid_downscale_nv12(struct vfe_device *vfe, u32 in_w, u32 in_h,
+					 const struct v4l2_rect *compose)
 {
+	bool scale = compose->width != in_w || compose->height != in_h;
+	u32 in_size = ((in_w - 1) << 16) | (in_h - 1);
+
+	if (scale) {
+		writel_relaxed(0x00000001, vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_MODULE_CFG);
+		writel_relaxed(0x00000600, vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_CFG);
+		writel_relaxed(in_size, vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_IMAGE_SIZE_CFG);
+		writel_relaxed(IFE_DOWNSCALE_MN_STEP(in_w, compose->width),
+			       vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_H_CFG);
+		writel_relaxed(0x00000000, vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_H_PHASE_CFG);
+		writel_relaxed(IFE_DOWNSCALE_MN_STEP(in_h, compose->height),
+			       vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_V_CFG);
+		writel_relaxed(0x00000000, vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_V_PHASE_CFG);
+		writel_relaxed(in_h - 1, vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_LINE_END_CFG);
+		writel_relaxed(in_w - 1, vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_DOWNSCALE_MN_Y_PIXEL_END_CFG);
+	} else {
+		writel_relaxed(0x00000000, vfe->base + IFE_DOWNSCALE_MN_Y_VID_OUT_MODULE_CFG);
+	}
+
 	writel_relaxed(0x00000001, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_MODULE_CFG);
 	writel_relaxed(0x00000600, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_CFG);
-	writel_relaxed(((w - 1) << 16) | (h - 1), vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_IMAGE_SIZE_CFG);
-	writel_relaxed(0xc0400000, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_H_CFG);
+	writel_relaxed(in_size, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_IMAGE_SIZE_CFG);
+	writel_relaxed(IFE_DOWNSCALE_MN_STEP(in_w, compose->width / 2),
+		       vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_H_CFG);
 	writel_relaxed(0x00000000, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_H_PHASE_CFG);
-	writel_relaxed(0xc0400000, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_V_CFG);
+	writel_relaxed(IFE_DOWNSCALE_MN_STEP(in_h, compose->height / 2),
+		       vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_V_CFG);
 	writel_relaxed(0x00000000, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_V_PHASE_CFG);
+	if (scale) {
+		writel_relaxed(in_h - 1, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_LINE_END_CFG);
+		writel_relaxed(in_w - 1, vfe->base + IFE_DOWNSCALE_MN_C_VID_OUT_DOWNSCALE_MN_C_PIXEL_END_CFG);
+	}
 }
 
 /* 12 bit black level subtracted ahead of demosaic, 42 at 10 bit */
@@ -688,6 +738,28 @@ static void vfe_setup_main_output_round_clamp(struct vfe_device *vfe)
 	writel_relaxed(0x000000ff, vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_CH2_CLAMP_MAX);
 }
 
+/* Crop the downscaled frame to the source pad crop, if it is not all of it */
+static void vfe_setup_vid_crop(struct vfe_device *vfe, const struct v4l2_rect *compose,
+			       const struct v4l2_rect *crop)
+{
+	if (crop->left == 0 && crop->top == 0 &&
+	    crop->width == compose->width && crop->height == compose->height)
+		return;
+
+	writel_relaxed(IFE_CROP_RND_CLAMP_RANGE(crop->top, crop->height),
+		       vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_CROP_LINE_CFG);
+	writel_relaxed(IFE_CROP_RND_CLAMP_RANGE(crop->left, crop->width),
+		       vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_CROP_PIXEL_CFG);
+	writel_relaxed(IFE_CROP_RND_CLAMP_RANGE(crop->top / 2, crop->height / 2),
+		       vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_CROP_LINE_CFG);
+	writel_relaxed(IFE_CROP_RND_CLAMP_RANGE(crop->left / 2, crop->width / 2),
+		       vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_CROP_PIXEL_CFG);
+	writel_relaxed(0x0000fc01 | IFE_CROP_RND_CLAMP_CROP_EN,
+		       vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_MODULE_CFG);
+	writel_relaxed(0x0000fc01 | IFE_CROP_RND_CLAMP_CROP_EN,
+		       vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_C_VID_OUT_MODULE_CFG);
+}
+
 /* DS4: 4:1 downscale of Y and C, with crops */
 static void vfe_setup_ds4(struct vfe_device *vfe, u32 w, u32 h)
 {
@@ -798,18 +870,22 @@ static void vfe_setup_ds16(struct vfe_device *vfe, u32 w, u32 h)
 
 /* Called from vfe_line_prepare() for NV12, ahead of the write masters and the IPP reg update */
 void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
-			      u32 w, u32 h, u32 code)
+			      u32 in_w, u32 in_h, const struct v4l2_rect *compose,
+			      const struct v4l2_rect *crop, u32 code)
 {
+	u32 w = crop->width, h = crop->height;
+
 	vfe_setup_core_config(vfe);
 	if (desc->demux_bls)
 		vfe_setup_demux_bls(vfe, code);
-	vfe_setup_chroma_downscale_nv12(vfe, w, h);
+	vfe_setup_vid_downscale_nv12(vfe, in_w, in_h, compose);
 	vfe_setup_demosaic(vfe, desc);
 	vfe_setup_color_correction(vfe);
 	vfe_setup_gamma_luts(vfe);
 	vfe_setup_color_transform(vfe);
-	vfe_setup_aec_bhist(vfe, w, h);
+	vfe_setup_aec_bhist(vfe, in_w, in_h);
 	vfe_setup_main_output_round_clamp(vfe);
+	vfe_setup_vid_crop(vfe, compose, crop);
 	vfe_setup_ds4(vfe, w, h);
 	vfe_setup_ds16(vfe, w, h);
 
