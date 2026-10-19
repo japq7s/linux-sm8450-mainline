@@ -682,6 +682,39 @@ static void vfe_setup_ds16(struct vfe_device *vfe, u32 w, u32 h)
 	writel_relaxed(0x000003ff, vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_4TO1_C_VID_DS16_OUT_CH2_CLAMP_MAX);
 }
 
+/*
+ * TEMPORARY (SM8450 bring-up): read back the module enables and a few values
+ * the pipe just wrote, to check that the IFE 680 has these modules at the
+ * IFE 880 offsets. A register that does not exist reads back as zero.
+ */
+void vfe_880_dump_pixel_pipe(struct vfe_device *vfe)
+{
+	static const struct { const char *name; u32 off; } regs[] = {
+		{ "hw_version", 0x0 },
+		{ "color_feature", 0x10 },
+		{ "core_cfg_0", IFE_TOP_CORE_CFG_0 },
+		{ "wb_module", IFE_WB_GAIN_MODULE_CFG },
+		{ "wb_cfg_0", IFE_WB_GAIN_WB_CFG_0 },
+		{ "demosaic_module", IFE_DEMOSAIC_MODULE_CFG },
+		{ "demosaic_coeff_0", IFE_DEMOSAIC_INTERP_COEFF_CFG_0 },
+		{ "cc_module", IFE_COLOR_CORRECT_MODULE_CFG },
+		{ "cc_coeff_a_0", IFE_COLOR_CORRECT_COLOR_CORRECT_COEFF_A_CFG_0 },
+		{ "glut_module", IFE_GLUT_MODULE_CFG },
+		{ "xform_module", IFE_COLOR_XFORM_MODULE_CFG },
+		{ "xform_ch0_coeff_0", IFE_COLOR_XFORM_COLOR_XFORM_CH0_COEFF_CFG_0 },
+		{ "ds_mn_c_module", IFE_DOWNSCALE_MN_C_VID_OUT_MODULE_CFG },
+		{ "crc_y_module", IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_MODULE_CFG },
+		{ "dsx_y_module", IFE_DSX_Y_VID_OUT_MODULE_CFG },
+		{ "bhist_module", IFE_STATS_AEC_BHIST_MODULE_CFG },
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++)
+		dev_info(vfe->camss->dev, "IFE%u pp %-18s [0x%05x] = 0x%08x\n",
+			 vfe->id, regs[i].name, regs[i].off,
+			 readl(vfe->base + regs[i].off));
+}
+
 /* Called from vfe_line_prepare() for NV12, ahead of the write masters and the IPP reg update */
 void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
 			      u32 w, u32 h, u32 code)

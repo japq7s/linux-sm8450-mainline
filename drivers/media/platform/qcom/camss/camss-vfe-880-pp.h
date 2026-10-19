@@ -17,6 +17,7 @@ extern const struct vfe_pp_desc vfe_pp_desc_880;
 
 void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
 			      u32 width, u32 height, u32 code);
+void vfe_880_dump_pixel_pipe(struct vfe_device *vfe);
 void vfe_880_set_aec_bhist_region(struct vfe_device *vfe, u32 h_offset,
 				  u32 v_offset, u32 h_num, u32 v_num);
 
