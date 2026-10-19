@@ -47,6 +47,8 @@ typedef enum {
 	VFE_WM_STATS_ALSC,
 }vfe_wm_t;
 
+#define VFE_680_WM_RDI0	24
+
 typedef enum {
 	VFE_LITE_WM_RDI0 = 0,
 	VFE_LITE_WM_RDI1,
@@ -238,7 +240,12 @@ static inline void vfe_reg_update_clear(struct vfe_device *vfe,
  */
 static const struct vfe_pp_desc *vfe_pp_desc(struct vfe_device *vfe)
 {
-	if (vfe->camss->res->version == CAMSS_8550)
+	/*
+	 * SM8450 (IFE 680): same CLC chain, TOP and bus layout as the 780 in
+	 * the downstream headers; module layout unverified, start from 780.
+	 */
+	if (vfe->camss->res->version == CAMSS_8550 ||
+	    vfe->camss->res->version == CAMSS_8450)
 		return &vfe_pp_desc_780;
 
 	return &vfe_pp_desc_880;
@@ -249,9 +256,13 @@ static void vfe_line_prepare(struct vfe_line *line)
 	struct v4l2_pix_format_mplane *pix = &line->output[0].video_out.active_fmt.fmt.pix_mp;
 	struct vfe_device *vfe = to_vfe(line);
 
-	if (line->is_pix && pix->pixelformat == V4L2_PIX_FMT_NV12)
+	if (line->is_pix && pix->pixelformat == V4L2_PIX_FMT_NV12) {
 		vfe_880_setup_pixel_pipe(vfe, vfe_pp_desc(vfe), pix->width, pix->height,
 					 line->fmt[MSM_VFE_PAD_SINK].code);
+		/* TEMPORARY: SM8450 module layout check */
+		if (vfe->camss->res->version == CAMSS_8450)
+			vfe_880_dump_pixel_pipe(vfe);
+	}
 }
 
 static const struct camss_video_ops vfe_video_ops_780 = {
@@ -359,6 +370,7 @@ static void vfe_params_apply(struct vfe_device *vfe, struct vfe_line *line,
 static void vfe_subdev_init(struct device *dev, struct vfe_device *vfe)
 {
 	struct vfe_line *pix = &vfe->line[VFE_LINE_PIX];
+	u8 rdi_wm;
 
 	vfe->video_ops = vfe_video_ops_780;
 
@@ -371,10 +383,15 @@ static void vfe_subdev_init(struct device *dev, struct vfe_device *vfe)
 		return;
 	}
 
-	/* RDI */
-	vfe_add_rdi(&vfe->line[VFE_LINE_RDI0].output[0], VFE_WM_RDI0, VFE_V3_COMP_GRP_14);
-	vfe_add_rdi(&vfe->line[VFE_LINE_RDI1].output[0], VFE_WM_RDI1, VFE_V3_COMP_GRP_15);
-	vfe_add_rdi(&vfe->line[VFE_LINE_RDI2].output[0], VFE_WM_RDI2, VFE_V3_COMP_GRP_16);
+	/*
+	 * RDI. IFE 680 (SM8450) has the same bus as the 780/880 up to the
+	 * IHIST client, then an extra LCR client before the RDIs, so its RDI
+	 * write masters are 24..26 (cam_vfe680.h).
+	 */
+	rdi_wm = vfe->camss->res->version == CAMSS_8450 ? VFE_680_WM_RDI0 : VFE_WM_RDI0;
+	vfe_add_rdi(&vfe->line[VFE_LINE_RDI0].output[0], rdi_wm, VFE_V3_COMP_GRP_14);
+	vfe_add_rdi(&vfe->line[VFE_LINE_RDI1].output[0], rdi_wm + 1, VFE_V3_COMP_GRP_15);
+	vfe_add_rdi(&vfe->line[VFE_LINE_RDI2].output[0], rdi_wm + 2, VFE_V3_COMP_GRP_16);
 
 	/* Add YUV, DS4, DS16, stats and params descriptors */
 	vfe_add_yuv(&pix->output[0], VFE_WM_VIDEO_FULL_Y, VFE_WM_VIDEO_FULL_C, VFE_V3_COMP_GRP_0);

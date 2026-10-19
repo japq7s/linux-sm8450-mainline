@@ -1388,6 +1388,7 @@ static bool vfe_check_clock_levels(struct camss_clock *clock)
 static u32 vfe_pix_ppc(struct vfe_device *vfe)
 {
 	switch (vfe->camss->res->version) {
+	case CAMSS_8450:
 	case CAMSS_8650:
 		return 2;
 	default:
@@ -2570,6 +2571,7 @@ static int vfe_bpl_align_rdi(struct vfe_device *vfe)
 static bool vfe_pix_line_based(struct vfe_device *vfe)
 {
 	switch (vfe->camss->res->version) {
+	case CAMSS_8450:
 	case CAMSS_8650:
 		return false;
 	default:
