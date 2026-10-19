@@ -108,6 +108,7 @@ enum icc_count {
 struct camss_resources {
 	enum camss_version version;
 	const char *pd_name;
+	const char *pm_clks[CAMSS_RES_MAX];
 	const struct camss_subdev_resources *csiphy_res;
 	const struct camss_subdev_resources *tpg_res;
 	const struct camss_subdev_resources *csid_res;
@@ -133,12 +134,20 @@ struct camss {
 	struct ispif_device *ispif;
 	struct vfe_device *vfe;
 	void __iomem *csid_wrapper_base;
+	void __iomem *top_base;
 	atomic_t ref_count;
 	int genpd_num;
 	struct device *genpd;
 	struct device_link *genpd_link;
 	struct icc_path *icc_path[ICC_SM8250_COUNT];
 	const struct camss_resources *res;
+	bool legacy_phy;
+};
+
+struct camss_buf_done_info {
+	int hw_id;
+	int port_id;
+	u32 status;
 };
 
 struct camss_camera_interface {
@@ -177,7 +186,7 @@ void camss_pm_domain_off(struct camss *camss, int id);
 int camss_vfe_get(struct camss *camss, int id);
 void camss_vfe_put(struct camss *camss, int id);
 void camss_delete(struct camss *camss);
-void camss_buf_done(struct camss *camss, int hw_id, int port_id);
+void camss_buf_done(struct camss *camss, struct camss_buf_done_info *info);
 void camss_reg_update(struct camss *camss, int hw_id,
 		      int port_id, bool is_clear);
 
