@@ -9,6 +9,7 @@ struct vfe_device;
 /* What differs between the IFEs that run this pixel pipe */
 struct vfe_pp_desc {
 	u32 wb_gain;	/* WB gain register value for full scale */
+	u8 wb_gain_shift;	/* position of the 15uQ10 gain field */
 	bool demux_bls;	/* subtract the black level in demux + BLS */
 };
 
@@ -17,7 +18,9 @@ extern const struct vfe_pp_desc vfe_pp_desc_880;
 
 void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
 			      u32 width, u32 height, u32 code);
-void vfe_880_dump_pixel_pipe(struct vfe_device *vfe);
+void vfe_880_set_black_level(struct vfe_device *vfe, u32 g, u32 b, u32 r);
+void vfe_880_set_wb_gain(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
+			 u32 g, u32 b, u32 r);
 void vfe_880_set_aec_bhist_region(struct vfe_device *vfe, u32 h_offset,
 				  u32 v_offset, u32 h_num, u32 v_num);
 

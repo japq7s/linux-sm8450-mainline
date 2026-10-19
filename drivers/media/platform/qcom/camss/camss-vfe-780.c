@@ -269,9 +269,6 @@ static void vfe_line_prepare(struct vfe_line *line)
 	if (line->is_pix && pix->pixelformat == V4L2_PIX_FMT_NV12) {
 		vfe_880_setup_pixel_pipe(vfe, vfe_pp_desc(vfe), pix->width, pix->height,
 					 line->fmt[MSM_VFE_PAD_SINK].code);
-		/* TEMPORARY: SM8450 module layout check */
-		if (vfe->camss->res->version == CAMSS_8450)
-			vfe_880_dump_pixel_pipe(vfe);
 	}
 }
 
@@ -288,6 +285,40 @@ static int vfe_params_block_unsupported(struct device *dev,
 	dev_dbg(dev, "Unsupported parameters block type %u\n", block->type);
 
 	return -EINVAL;
+}
+
+static int vfe_params_wb_gain_validate(struct device *dev,
+				       const struct v4l2_isp_block_header *block)
+{
+	const struct camss_params_wb_gain *wb =
+		container_of(block, struct camss_params_wb_gain, header);
+
+	/* only the pixel pipes with a demux + BLS stage take black levels */
+	if ((wb->g_gain | wb->b_gain | wb->r_gain) & 0x8000 ||
+	    wb->g_add || wb->b_add || wb->r_add) {
+		dev_dbg(dev, "Invalid WB gain block\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+/* 16u normalised (65535 = 1.0) to the 12 bit BLS scale */
+static u32 vfe_params_sub_to_bls(u16 sub)
+{
+	return DIV_ROUND_CLOSEST(sub * 4095u, 65535u);
+}
+
+static void vfe_params_wb_gain(struct vfe_device *vfe,
+			       const struct camss_params_wb_gain *wb)
+{
+	const struct vfe_pp_desc *desc = vfe_pp_desc(vfe);
+
+	vfe_880_set_wb_gain(vfe, desc, wb->g_gain, wb->b_gain, wb->r_gain);
+	if (desc->demux_bls)
+		vfe_880_set_black_level(vfe, vfe_params_sub_to_bls(wb->g_sub),
+					vfe_params_sub_to_bls(wb->b_sub),
+					vfe_params_sub_to_bls(wb->r_sub));
 }
 
 static int vfe_params_aec_bhist_validate(struct device *dev,
@@ -317,7 +348,7 @@ static const struct v4l2_isp_params_block_type_info vfe_params_info[] = {
 	},
 	[CAMSS_PARAMS_WB_GAIN] = {
 		.size = sizeof(struct camss_params_wb_gain),
-		.block_validate = vfe_params_block_unsupported,
+		.block_validate = vfe_params_wb_gain_validate,
 	},
 	[CAMSS_PARAMS_CHROMA_ENHAN] = {
 		.size = sizeof(struct camss_params_chroma_enhan),
@@ -366,6 +397,12 @@ static void vfe_params_apply(struct vfe_device *vfe, struct vfe_line *line,
 	while (offset < params->data_size) {
 		const struct v4l2_isp_block_header *block =
 			(const struct v4l2_isp_block_header *)&params->data[offset];
+
+		if (block->type == CAMSS_PARAMS_WB_GAIN &&
+		    !(block->flags & V4L2_ISP_PARAMS_FL_BLOCK_DISABLE))
+			vfe_params_wb_gain(vfe, container_of(block,
+							     struct camss_params_wb_gain,
+							     header));
 
 		if (block->type == CAMSS_PARAMS_AEC_BHIST &&
 		    !(block->flags & V4L2_ISP_PARAMS_FL_BLOCK_DISABLE))
