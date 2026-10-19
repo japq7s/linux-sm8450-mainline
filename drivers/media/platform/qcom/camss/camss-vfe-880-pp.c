@@ -328,10 +328,40 @@ static void vfe_setup_chroma_downscale_nv12(struct vfe_device *vfe, u32 w, u32 h
 /* 12 bit black level subtracted ahead of demosaic, 42 at 10 bit */
 #define IFE_780_BLACK_LEVEL	168
 
+/*
+ * Demux + BLS: subtract a 12 bit black level per channel and stretch the
+ * rest back to full scale. The gain compensates the green level.
+ */
+void vfe_880_set_black_level(struct vfe_device *vfe, u32 g, u32 b, u32 r)
+{
+	u32 gain;
+
+	g = min(g, 4000u);
+	b = min(b, 4000u);
+	r = min(r, 4000u);
+	gain = DIV_ROUND_CLOSEST(0x400 * 4095, 4095 - g);
+
+	writel_relaxed(gain << 16 | gain, vfe->base + IFE_DEMUX_BLS_GAIN_CFG_0);
+	writel_relaxed(gain << 16 | gain, vfe->base + IFE_DEMUX_BLS_GAIN_CFG_1);
+	writel_relaxed(IFE_DEMUX_BLS_SUB(g), vfe->base + IFE_DEMUX_BLS_SUB_G_EVEN);
+	writel_relaxed(IFE_DEMUX_BLS_SUB(g), vfe->base + IFE_DEMUX_BLS_SUB_G_ODD);
+	writel_relaxed(IFE_DEMUX_BLS_SUB(b), vfe->base + IFE_DEMUX_BLS_SUB_B);
+	writel_relaxed(IFE_DEMUX_BLS_SUB(r), vfe->base + IFE_DEMUX_BLS_SUB_R);
+}
+
+/* WB gains, 15uQ10 (1024 = 1.0), in the register layout of this IFE */
+void vfe_880_set_wb_gain(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
+			 u32 g, u32 b, u32 r)
+{
+	writel_relaxed((g & 0x7fff) << desc->wb_gain_shift, vfe->base + IFE_WB_GAIN_WB_CFG_0);
+	writel_relaxed((b & 0x7fff) << desc->wb_gain_shift, vfe->base + IFE_WB_GAIN_WB_CFG_1);
+	writel_relaxed((r & 0x7fff) << desc->wb_gain_shift, vfe->base + IFE_WB_GAIN_WB_CFG_2);
+}
+
 /* Demux + BLS: CFA order from the sink format, black level subtracted */
 static void vfe_setup_demux_bls(struct vfe_device *vfe, u32 code)
 {
-	u32 even, odd, gain, bl = IFE_780_BLACK_LEVEL;
+	u32 even, odd, bl = IFE_780_BLACK_LEVEL;
 
 	switch (code) {
 	case MEDIA_BUS_FMT_SRGGB8_1X8:
@@ -361,22 +391,16 @@ static void vfe_setup_demux_bls(struct vfe_device *vfe, u32 code)
 		break;
 	}
 
-	gain = DIV_ROUND_CLOSEST(0x400 * 4095, 4095 - bl);
-
 	writel_relaxed(even, vfe->base + IFE_DEMUX_BLS_EVEN_CFG);
 	writel_relaxed(odd, vfe->base + IFE_DEMUX_BLS_ODD_CFG);
-	writel_relaxed(gain << 16 | gain, vfe->base + IFE_DEMUX_BLS_GAIN_CFG_0);
-	writel_relaxed(gain << 16 | gain, vfe->base + IFE_DEMUX_BLS_GAIN_CFG_1);
-	writel_relaxed(IFE_DEMUX_BLS_SUB(bl), vfe->base + IFE_DEMUX_BLS_SUB_G_EVEN);
-	writel_relaxed(IFE_DEMUX_BLS_SUB(bl), vfe->base + IFE_DEMUX_BLS_SUB_G_ODD);
-	writel_relaxed(IFE_DEMUX_BLS_SUB(bl), vfe->base + IFE_DEMUX_BLS_SUB_B);
-	writel_relaxed(IFE_DEMUX_BLS_SUB(bl), vfe->base + IFE_DEMUX_BLS_SUB_R);
+	vfe_880_set_black_level(vfe, bl, bl, bl);
 	writel_relaxed(IFE_DEMUX_BLS_PERIOD(1) | 1, vfe->base + IFE_DEMUX_BLS_MODULE_CFG);
 }
 
 /* IFE 780: Q10 gain held in bits 31:17, its demosaic needs the black level gone */
 const struct vfe_pp_desc vfe_pp_desc_780 = {
 	.wb_gain = 0x400 << 17,
+	.wb_gain_shift = 17,
 	.demux_bls = true,
 };
 
@@ -680,39 +704,6 @@ static void vfe_setup_ds16(struct vfe_device *vfe, u32 w, u32 h)
 	writel_relaxed(0x000003ff, vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_4TO1_C_VID_DS16_OUT_CH0_CLAMP_MAX);
 	writel_relaxed(0x000003ff, vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_4TO1_C_VID_DS16_OUT_CH1_CLAMP_MAX);
 	writel_relaxed(0x000003ff, vfe->base + IFE_CROP_RND_CLAMP_POST_DOWNSCALE_4TO1_C_VID_DS16_OUT_CH2_CLAMP_MAX);
-}
-
-/*
- * TEMPORARY (SM8450 bring-up): read back the module enables and a few values
- * the pipe just wrote, to check that the IFE 680 has these modules at the
- * IFE 880 offsets. A register that does not exist reads back as zero.
- */
-void vfe_880_dump_pixel_pipe(struct vfe_device *vfe)
-{
-	static const struct { const char *name; u32 off; } regs[] = {
-		{ "hw_version", 0x0 },
-		{ "color_feature", 0x10 },
-		{ "core_cfg_0", IFE_TOP_CORE_CFG_0 },
-		{ "wb_module", IFE_WB_GAIN_MODULE_CFG },
-		{ "wb_cfg_0", IFE_WB_GAIN_WB_CFG_0 },
-		{ "demosaic_module", IFE_DEMOSAIC_MODULE_CFG },
-		{ "demosaic_coeff_0", IFE_DEMOSAIC_INTERP_COEFF_CFG_0 },
-		{ "cc_module", IFE_COLOR_CORRECT_MODULE_CFG },
-		{ "cc_coeff_a_0", IFE_COLOR_CORRECT_COLOR_CORRECT_COEFF_A_CFG_0 },
-		{ "glut_module", IFE_GLUT_MODULE_CFG },
-		{ "xform_module", IFE_COLOR_XFORM_MODULE_CFG },
-		{ "xform_ch0_coeff_0", IFE_COLOR_XFORM_COLOR_XFORM_CH0_COEFF_CFG_0 },
-		{ "ds_mn_c_module", IFE_DOWNSCALE_MN_C_VID_OUT_MODULE_CFG },
-		{ "crc_y_module", IFE_CROP_RND_CLAMP_POST_DOWNSCALE_MN_Y_VID_OUT_MODULE_CFG },
-		{ "dsx_y_module", IFE_DSX_Y_VID_OUT_MODULE_CFG },
-		{ "bhist_module", IFE_STATS_AEC_BHIST_MODULE_CFG },
-	};
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(regs); i++)
-		dev_info(vfe->camss->dev, "IFE%u pp %-18s [0x%05x] = 0x%08x\n",
-			 vfe->id, regs[i].name, regs[i].off,
-			 readl(vfe->base + regs[i].off));
 }
 
 /* Called from vfe_line_prepare() for NV12, ahead of the write masters and the IPP reg update */
