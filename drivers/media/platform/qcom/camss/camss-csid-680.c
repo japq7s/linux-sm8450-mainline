@@ -12,6 +12,8 @@
 #include "camss.h"
 #include "camss-csid.h"
 #include "camss-csid-gen2.h"
+#include "camss-csid-gen3.h"
+#include "camss-vfe.h"
 
 #define CSID_TOP_IO_PATH_CFG0(csid)				(0x4 * (csid))
 #define		CSID_TOP_IO_PATH_CFG0_INTERNAL_CSID		BIT(0)
@@ -129,6 +131,36 @@
 #define CSID_CSI2_RX_STATS_ECC					0x244
 #define CSID_CSI2_RX_CRC_ERRORS					0x248
 
+/* IPP: the pixel path feeding the IFE pixel pipe (cam_ife_csid680.h) */
+#define CSID_CSI2_IPP_IRQ_STATUS				0xac
+#define CSID_CSI2_IPP_IRQ_MASK					0xb0
+#define CSID_CSI2_IPP_IRQ_CLEAR					0xb4
+#define		CSID_CSI2_IPP_RUP_DONE				BIT(23)
+
+#define CSID_IPP_CFG0						0x300
+#define		IPP_CFG0_DECODE_FORMAT				12
+#define		IPP_CFG0_DATA_TYPE				16
+#define		IPP_CFG0_VIRTUAL_CHANNEL			22
+#define		IPP_CFG0_DT_ID					27
+#define		IPP_CFG0_ENABLE					BIT(31)
+#define CSID_IPP_CTRL						0x304
+#define		IPP_CTRL_RESUME_AT_FRAME_BOUNDARY		BIT(0)
+#define CSID_IPP_CFG1						0x310
+#define		IPP_CFG1_TIMESTAMP_STB_SEL			0
+#define		IPP_CFG1_TIMESTAMP_EN				BIT(9)
+#define		IPP_CFG1_PIX_STORE_EN				BIT(14)
+#define CSID_IPP_ERR_RECOVERY_CFG0				0x318
+#define		IPP_OVERFLOW_CTRL				(BIT(0) | 0x8)
+#define CSID_IPP_PIX_DROP_PATTERN				0x364
+#define CSID_IPP_PIX_DROP_PERIOD				0x368
+#define CSID_IPP_LINE_DROP_PATTERN				0x36c
+#define CSID_IPP_LINE_DROP_PERIOD				0x370
+#define CSID_IPP_FRM_DROP_PATTERN				0x374
+#define CSID_IPP_FRM_DROP_PERIOD				0x378
+
+/* RUP/AUP command bits of the IPP (rup_aup_mask 0x10001) */
+#define CSID_RUP_AUP_IPP					(BIT(0) | BIT(16))
+
 #define CSID_RDI_CFG0(rdi)					(0x500 + 0x100 * (rdi))
 #define		RDI_CFG0_DECODE_FORMAT				12
 #define		RDI_CFG0_DATA_TYPE				16
@@ -170,17 +202,31 @@ static inline int reg_update_rdi(struct csid_device *csid, int n)
 	return BIT(4 + n) + BIT(20 + n);
 }
 
+static u32 reg_update_port(struct csid_device *csid, int port_id)
+{
+	/* the IFE pixel line latches through the IPP */
+	if (port_id == CSID_780_CUSTOM_PORT_ID_IPP0)
+		return CSID_RUP_AUP_IPP;
+
+	return reg_update_rdi(csid, port_id);
+}
+
 static void csid_reg_update(struct csid_device *csid, int port_id)
 {
-	csid->reg_update |= reg_update_rdi(csid, port_id);
+	csid->reg_update |= reg_update_port(csid, port_id);
 	writel(csid->reg_update, csid->base + CSID_REG_UPDATE_CMD);
 }
 
 static inline void csid_reg_update_clear(struct csid_device *csid,
 					 int port_id)
 {
-	csid->reg_update &= ~reg_update_rdi(csid, port_id);
+	csid->reg_update &= ~reg_update_port(csid, port_id);
 	writel(csid->reg_update, csid->base + CSID_REG_UPDATE_CMD);
+}
+
+static bool csid_port_is_ipp(struct csid_device *csid, u8 port)
+{
+	return !csid_is_lite(csid) && port == VFE_LINE_PIX;
 }
 
 static void __csid_configure_rx(struct csid_device *csid,
@@ -299,6 +345,52 @@ static void __csid_configure_rdi_stream(struct csid_device *csid, u8 enable, u8 
 	writel(val, csid->base + CSID_RDI_CFG0(port));
 }
 
+/* Programmed like cam_ife_csid_ver2_init_config_pxl_path() */
+static void __csid_configure_ipp_stream(struct csid_device *csid, u8 enable, u8 port, u8 vc)
+{
+	struct v4l2_mbus_framefmt *input_format = &csid->fmt[MSM_CSID_PAD_FIRST_SRC + port];
+	const struct csid_format_info *format = csid_get_fmt_entry(csid->res->formats->formats,
+								   csid->res->formats->nformats,
+								   input_format->code);
+	u32 val;
+
+	writel(0, csid->base + CSID_IPP_CTRL);
+
+	/* the IPP decodes the pixels for the pixel pipe */
+	val = format->decode_format << IPP_CFG0_DECODE_FORMAT;
+	val |= format->data_type << IPP_CFG0_DATA_TYPE;
+	val |= vc << IPP_CFG0_VIRTUAL_CHANNEL;
+	val |= 0 << IPP_CFG0_DT_ID;
+	writel(val, csid->base + CSID_IPP_CFG0);
+
+	val = IPP_CFG1_PIX_STORE_EN | IPP_CFG1_TIMESTAMP_EN;
+	val |= 0x2 << IPP_CFG1_TIMESTAMP_STB_SEL;
+	writel(val, csid->base + CSID_IPP_CFG1);
+
+	/* no dropped frames, pixels or lines */
+	writel(1, csid->base + CSID_IPP_FRM_DROP_PERIOD);
+	writel(0, csid->base + CSID_IPP_FRM_DROP_PATTERN);
+	writel(0, csid->base + CSID_IPP_PIX_DROP_PATTERN);
+	writel(1, csid->base + CSID_IPP_PIX_DROP_PERIOD);
+	writel(0, csid->base + CSID_IPP_LINE_DROP_PATTERN);
+	writel(1, csid->base + CSID_IPP_LINE_DROP_PERIOD);
+
+	writel(IPP_OVERFLOW_CTRL, csid->base + CSID_IPP_ERR_RECOVERY_CFG0);
+
+	val = readl(csid->base + CSID_IPP_CFG0);
+	if (enable)
+		val |= IPP_CFG0_ENABLE;
+	else
+		val &= ~IPP_CFG0_ENABLE;
+	writel(val, csid->base + CSID_IPP_CFG0);
+}
+
+static void __csid_ctrl_ipp(struct csid_device *csid, int enable)
+{
+	writel(enable ? IPP_CTRL_RESUME_AT_FRAME_BOUNDARY : 0,
+	       csid->base + CSID_IPP_CTRL);
+}
+
 static void csid_configure_stream(struct csid_device *csid, u8 enable)
 {
 	int i;
@@ -307,7 +399,15 @@ static void csid_configure_stream(struct csid_device *csid, u8 enable)
 
 	/* Loop through all enabled ports and configure a stream for each */
 	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++) {
-		if (csid->phy.en_vc & BIT(i)) {
+		if (!(csid->phy.en_vc & BIT(i)))
+			continue;
+
+		if (csid_port_is_ipp(csid, i)) {
+			/* the VFE has programmed the pixel pipe in its s_stream */
+			__csid_configure_ipp_stream(csid, enable, i, 0);
+			__csid_configure_rx(csid, &csid->phy, 0);
+			__csid_ctrl_ipp(csid, enable);
+		} else {
 			__csid_configure_rdi_stream(csid, enable, i, 0);
 			__csid_configure_rx(csid, &csid->phy, 0);
 			__csid_ctrl_rdi(csid, enable, i);
@@ -349,6 +449,9 @@ static int csid_reset(struct csid_device *csid)
 		/* Enable RUP done for the client port */
 		writel(CSID_CSI2_RDIN_RUP_DONE, csid->base + CSID_CSI2_RDIN_IRQ_MASK(i));
 	}
+
+	if (!csid_is_lite(csid))
+		writel(CSID_CSI2_IPP_RUP_DONE, csid->base + CSID_CSI2_IPP_IRQ_MASK);
 
 	/* Clear RDI status */
 	writel(~0u, csid->base + CSID_BUF_DONE_IRQ_CLEAR);
@@ -393,8 +496,29 @@ static irqreturn_t csid_isr(int irq, void *dev)
 	buf_done_val = readl(csid->base + CSID_BUF_DONE_IRQ_STATUS);
 	writel(buf_done_val, csid->base + CSID_BUF_DONE_IRQ_CLEAR);
 
+	/* The IPP feeding the pixel line */
+	if (!csid_is_lite(csid) && (csid->phy.en_vc & BIT(VFE_LINE_PIX))) {
+		val = readl(csid->base + CSID_CSI2_IPP_IRQ_STATUS);
+		if (val)
+			writel(val, csid->base + CSID_CSI2_IPP_IRQ_CLEAR);
+
+		if (val & CSID_CSI2_IPP_RUP_DONE)
+			csid_reg_update_clear(csid, CSID_780_CUSTOM_PORT_ID_IPP0);
+
+		/* pixel and statistics completion groups sit below the RDI bits */
+		info.status = buf_done_val & (BIT(BUF_DONE_IRQ_STATUS_RDI_OFFSET) - 1);
+		if (info.status) {
+			info.hw_id = csid->id;
+			info.port_id = VFE_LINE_PIX;
+			camss_buf_done(csid->camss, &info);
+		}
+	}
+
 	/* Process state for each RDI channel */
 	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++) {
+		if (csid_port_is_ipp(csid, i))
+			continue;
+
 		val = readl(csid->base + CSID_CSI2_RDIN_IRQ_STATUS(i));
 		if (val)
 			writel(val, csid->base + CSID_CSI2_RDIN_IRQ_CLEAR(i));
@@ -405,6 +529,7 @@ static irqreturn_t csid_isr(int irq, void *dev)
 		if (buf_done_val & BIT(BUF_DONE_IRQ_STATUS_RDI_OFFSET + i)) {
 			info.hw_id = csid->id;
 			info.port_id = i;
+			info.status = 0;
 			camss_buf_done(csid->camss, &info);
 		}
 	}
