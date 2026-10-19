@@ -235,7 +235,10 @@ struct camss_params_aec_bhist {
 } __attribute__((aligned(8)));
 
 #define CAMSS_PARAMS_IFE_MAX_PAYLOAD		\
-	sizeof(struct camss_params_aec_bhist)
+	(sizeof(struct camss_params_wb_gain)	+\
+	 sizeof(struct camss_params_color_correct)	+\
+	 sizeof(struct camss_params_gamma)	+\
+	 sizeof(struct camss_params_aec_bhist))
 
 /**
  * enum camss_stats_block_type - CAMSS ISP statistics block identifiers
