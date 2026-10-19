@@ -264,7 +264,13 @@ static void vfe_line_prepare(struct vfe_line *line)
 	struct vfe_device *vfe = to_vfe(line);
 
 	if (line->is_pix && pix->pixelformat == V4L2_PIX_FMT_NV12) {
-		vfe_880_setup_pixel_pipe(vfe, vfe_pp_desc(vfe), pix->width, pix->height,
+		/* the source pad crop, which the output format follows */
+		WARN_ON_ONCE(line->crop.width != pix->width || line->crop.height != pix->height);
+
+		vfe_880_setup_pixel_pipe(vfe, vfe_pp_desc(vfe),
+					 line->fmt[MSM_VFE_PAD_SINK].width,
+					 line->fmt[MSM_VFE_PAD_SINK].height,
+					 &line->compose, &line->crop,
 					 line->fmt[MSM_VFE_PAD_SINK].code);
 	}
 }

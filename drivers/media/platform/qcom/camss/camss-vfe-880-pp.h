@@ -6,6 +6,7 @@
 
 struct camss_params_color_correct;
 struct camss_params_gamma;
+struct v4l2_rect;
 struct vfe_device;
 
 /* What differs between the IFEs that run this pixel pipe */
@@ -21,7 +22,8 @@ extern const struct vfe_pp_desc vfe_pp_desc_780;
 extern const struct vfe_pp_desc vfe_pp_desc_880;
 
 void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
-			      u32 width, u32 height, u32 code);
+			      u32 in_width, u32 in_height, const struct v4l2_rect *compose,
+			      const struct v4l2_rect *crop, u32 code);
 void vfe_880_set_black_level(struct vfe_device *vfe, u32 g, u32 b, u32 r);
 void vfe_880_set_wb_gain(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
 			 u32 g, u32 b, u32 r);
