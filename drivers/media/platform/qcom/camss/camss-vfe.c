@@ -627,6 +627,9 @@ static const struct v4l2_isp_stats_block_type_info vfe_stats_block_info[] = {
 	[CAMSS_STATS_AEC_BHIST] = { .size = sizeof(struct camss_stats_bhist) },
 };
 
+/* Bytes the AEC BHIST write master writes after the bins */
+#define VFE_STATS_BHIST_TAIL	80
+
 /*
  * vfe_alloc_stats - Allocate the write master target of a statistics output
  * @vfe: VFE device
@@ -640,7 +643,13 @@ static const struct v4l2_isp_stats_block_type_info vfe_stats_block_info[] = {
  */
 int vfe_alloc_stats(struct vfe_device *vfe, struct vfe_output *output)
 {
-	output->dma_size = sizeof_field(struct camss_stats_bhist, bins);
+	/*
+	 * The write master writes past the bins: 4176 bytes measured on the
+	 * IFE 680. A buffer of the bins alone, at the top of the IOVA space,
+	 * wrapped that tail to address 0.
+	 */
+	output->dma_size = PAGE_ALIGN(sizeof_field(struct camss_stats_bhist, bins) +
+				      VFE_STATS_BHIST_TAIL);
 	output->dma_vaddr = dmam_alloc_coherent(vfe->camss->dev,
 						output->dma_size,
 						&output->dma_addr, GFP_KERNEL);
