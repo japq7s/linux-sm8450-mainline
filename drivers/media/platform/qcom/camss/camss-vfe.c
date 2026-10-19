@@ -1544,9 +1544,17 @@ static int vfe_check_clock_rates(struct vfe_device *vfe)
 
 			camss_add_clock_margin(&min_rate);
 
-			/* see vfe_set_clock_rates(): the pixel line runs at the top rate */
-			if (pix_line && min_rate > clock->freq[clock->nfreqs - 1])
-				min_rate = clock->freq[clock->nfreqs - 1];
+			/*
+			 * See vfe_set_clock_rates(): the pixel line runs at the
+			 * top level, as the clock rounds it (727 MHz for 785 MHz
+			 * on SM8450).
+			 */
+			if (pix_line && min_rate > clock->freq[clock->nfreqs - 1]) {
+				long top = clk_round_rate(clock->clk,
+							  clock->freq[clock->nfreqs - 1]);
+
+				min_rate = top > 0 ? top : clock->freq[clock->nfreqs - 1];
+			}
 
 			rate = clk_get_rate(clock->clk);
 			if (rate < min_rate)
