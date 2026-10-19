@@ -12,6 +12,7 @@
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/media-bus-format.h>
+#include <linux/qcom-camss-config.h>
 
 #include "camss.h"
 #include "camss-vfe.h"
@@ -443,6 +444,72 @@ static void vfe_setup_color_correction(struct vfe_device *vfe)
 	writel_relaxed(0x00000000, vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_OFFSET_K_CFG(1));
 	writel_relaxed(0x00000000, vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_OFFSET_K_CFG(2));
 	writel_relaxed(0x00000000, vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_SHIFT_M_CFG);
+}
+
+#define IFE_CC_COEFF(x)		((x) & 0xfff)
+
+/*
+ * The A, B and C coefficient sets multiply the G, B and R inputs. The
+ * outputs leave in the order the colour transform takes them, R, G, B with
+ * the first coefficient of a register in its low half, which is what makes
+ * the identity in the uAPI's G, B, R order reproduce the defaults above.
+ */
+void vfe_880_set_color_correct(struct vfe_device *vfe,
+			       const struct camss_params_color_correct *cc)
+{
+	writel_relaxed(IFE_CC_COEFF(cc->a[2]) | IFE_CC_COEFF(cc->a[0]) << 16,
+		       vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_COEFF_A_CFG_0);
+	writel_relaxed(IFE_CC_COEFF(cc->a[1]),
+		       vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_COEFF_A_CFG_1);
+	writel_relaxed(IFE_CC_COEFF(cc->b[2]) | IFE_CC_COEFF(cc->b[0]) << 16,
+		       vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_COEFF_B_CFG_0);
+	writel_relaxed(IFE_CC_COEFF(cc->b[1]),
+		       vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_COEFF_B_CFG_1);
+	writel_relaxed(IFE_CC_COEFF(cc->c[2]) | IFE_CC_COEFF(cc->c[0]) << 16,
+		       vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_COEFF_C_CFG_0);
+	writel_relaxed(IFE_CC_COEFF(cc->c[1]),
+		       vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_COEFF_C_CFG_1);
+	writel_relaxed(cc->qfactor, vfe->base + IFE_COLOR_CORRECT_COLOR_CORRECT_SHIFT_M_CFG);
+}
+
+/* DMI LUT selectors of the R, G and B gamma tables */
+#define IFE_GLUT_LUT_R		1
+#define IFE_GLUT_LUT_G		2
+#define IFE_GLUT_LUT_B		3
+
+/* 8 bit uAPI level to the 12 bit GLUT output */
+static u32 vfe_glut_level(u16 v)
+{
+	return DIV_ROUND_CLOSEST(v * 4095u, 255u);
+}
+
+/*
+ * A GLUT entry holds its 12 bit output and, from bit 12, a quarter of the
+ * step to the next entry for the interpolation, as in vfe_pp_gamma_lut.
+ */
+static void vfe_write_glut(struct vfe_device *vfe, u32 lut, const u16 *levels)
+{
+	unsigned int i;
+
+	writel_relaxed(lut, vfe->base + IFE_GLUT_DMI_LUT_CFG);
+	writel_relaxed(0x00000000, vfe->base + IFE_GLUT_DMI_CFG);
+	for (i = 0; i < CAMSS_GAMMA_LUT_SIZE; i++) {
+		u32 v = vfe_glut_level(levels[i]);
+		u32 next = i + 1 < CAMSS_GAMMA_LUT_SIZE ?
+			   vfe_glut_level(levels[i + 1]) : 4095;
+
+		writel_relaxed((next - v) / 4 << 12 | v, vfe->base + IFE_GLUT_DMI_DATA);
+	}
+}
+
+/* Levels are validated non-decreasing and at most 255 */
+void vfe_880_set_gamma(struct vfe_device *vfe, const struct camss_params_gamma *gamma)
+{
+	writel_relaxed(0x00000000, vfe->base + IFE_GLUT_DMI_LUT_BANK_CFG);
+	vfe_write_glut(vfe, IFE_GLUT_LUT_R, gamma->rlut);
+	vfe_write_glut(vfe, IFE_GLUT_LUT_G, gamma->glut);
+	vfe_write_glut(vfe, IFE_GLUT_LUT_B, gamma->blut);
+	writel_relaxed(0x00000000, vfe->base + IFE_GLUT_DMI_LUT_CFG);
 }
 
 /* Per-channel gamma LUTs: 1/2.2, 256 entries, same table for R, G and B */

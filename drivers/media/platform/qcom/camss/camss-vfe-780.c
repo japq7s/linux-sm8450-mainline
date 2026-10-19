@@ -321,6 +321,66 @@ static void vfe_params_wb_gain(struct vfe_device *vfe,
 					vfe_params_sub_to_bls(wb->r_sub));
 }
 
+static bool vfe_params_is_12s(u16 v)
+{
+	return (s16)v >= -2048 && (s16)v <= 2047;
+}
+
+/*
+ * The order of the per-output offset registers is not known, so only a
+ * matrix without offsets is taken.
+ */
+static int vfe_params_color_correct_validate(struct device *dev,
+					     const struct v4l2_isp_block_header *block)
+{
+	const struct camss_params_color_correct *cc =
+		container_of(block, struct camss_params_color_correct, header);
+	unsigned int i;
+
+	for (i = 0; i < 3; i++) {
+		if (!vfe_params_is_12s(cc->a[i]) || !vfe_params_is_12s(cc->b[i]) ||
+		    !vfe_params_is_12s(cc->c[i]) || cc->k[i])
+			goto invalid;
+	}
+
+	if (cc->qfactor > 3)
+		goto invalid;
+
+	return 0;
+
+invalid:
+	dev_dbg(dev, "Invalid colour correction block\n");
+	return -EINVAL;
+}
+
+static bool vfe_params_gamma_lut_valid(const u16 *lut)
+{
+	unsigned int i;
+
+	for (i = 0; i < CAMSS_GAMMA_LUT_SIZE; i++)
+		if (lut[i] > 255 || (i && lut[i] < lut[i - 1]))
+			return false;
+
+	return true;
+}
+
+/* The interpolation step is unsigned: every curve must be non-decreasing */
+static int vfe_params_gamma_validate(struct device *dev,
+				     const struct v4l2_isp_block_header *block)
+{
+	const struct camss_params_gamma *gamma =
+		container_of(block, struct camss_params_gamma, header);
+
+	if (!vfe_params_gamma_lut_valid(gamma->glut) ||
+	    !vfe_params_gamma_lut_valid(gamma->blut) ||
+	    !vfe_params_gamma_lut_valid(gamma->rlut)) {
+		dev_dbg(dev, "Invalid gamma block\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int vfe_params_aec_bhist_validate(struct device *dev,
 					 const struct v4l2_isp_block_header *block)
 {
@@ -356,11 +416,11 @@ static const struct v4l2_isp_params_block_type_info vfe_params_info[] = {
 	},
 	[CAMSS_PARAMS_COLOR_CORRECT] = {
 		.size = sizeof(struct camss_params_color_correct),
-		.block_validate = vfe_params_block_unsupported,
+		.block_validate = vfe_params_color_correct_validate,
 	},
 	[CAMSS_PARAMS_GAMMA] = {
 		.size = sizeof(struct camss_params_gamma),
-		.block_validate = vfe_params_block_unsupported,
+		.block_validate = vfe_params_gamma_validate,
 	},
 	[CAMSS_PARAMS_AEC_BHIST] = {
 		.size = sizeof(struct camss_params_aec_bhist),
@@ -403,6 +463,18 @@ static void vfe_params_apply(struct vfe_device *vfe, struct vfe_line *line,
 			vfe_params_wb_gain(vfe, container_of(block,
 							     struct camss_params_wb_gain,
 							     header));
+
+		if (block->type == CAMSS_PARAMS_COLOR_CORRECT &&
+		    !(block->flags & V4L2_ISP_PARAMS_FL_BLOCK_DISABLE))
+			vfe_880_set_color_correct(vfe, container_of(block,
+							struct camss_params_color_correct,
+							header));
+
+		if (block->type == CAMSS_PARAMS_GAMMA &&
+		    !(block->flags & V4L2_ISP_PARAMS_FL_BLOCK_DISABLE))
+			vfe_880_set_gamma(vfe, container_of(block,
+							    struct camss_params_gamma,
+							    header));
 
 		if (block->type == CAMSS_PARAMS_AEC_BHIST &&
 		    !(block->flags & V4L2_ISP_PARAMS_FL_BLOCK_DISABLE))
