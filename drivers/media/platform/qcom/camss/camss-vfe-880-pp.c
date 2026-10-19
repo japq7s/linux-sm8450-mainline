@@ -41,6 +41,11 @@
 #define IFE_WB_GAIN_WB_OFFSET_CFG_3                              0x04580
 #define IFE_WB_GAIN_WB_OFFSET_CFG_4                              0x04584
 #define IFE_WB_GAIN_WB_OFFSET_CFG_5                              0x04588
+/* IFE 680: unnamed, values as programmed by the downstream camera stack */
+#define IFE_680_WB_GAIN_CLAMP_CFG_0                              0x04590
+#define		IFE_680_WB_GAIN_CLAMP_CFG_0_VAL			0x7fffe000
+#define IFE_680_WB_GAIN_CLAMP_CFG_1                              0x04594
+#define		IFE_680_WB_GAIN_CLAMP_CFG_1_VAL			0x0000030a
 #define IFE_DEMOSAIC_MODULE_CFG                                  0x05660
 #define IFE_DEMOSAIC_INTERP_COEFF_CFG_0                          0x05668
 #define IFE_DEMOSAIC_INTERP_COEFF_CFG_1                          0x0566c
@@ -398,6 +403,18 @@ static void vfe_setup_demux_bls(struct vfe_device *vfe, u32 code)
 	writel_relaxed(IFE_DEMUX_BLS_PERIOD(1) | 1, vfe->base + IFE_DEMUX_BLS_MODULE_CFG);
 }
 
+/*
+ * IFE 680: the 780 layout, but its WB clamp resets to 0x01000000/0x0000000a,
+ * which clips the green channel right after WB: the output then carries no
+ * green information, its green interpolated from red and blue.
+ */
+const struct vfe_pp_desc vfe_pp_desc_680 = {
+	.wb_gain = 0x400 << 17,
+	.wb_gain_shift = 17,
+	.demux_bls = true,
+	.wb_clamp = true,
+};
+
 /* IFE 780: Q10 gain held in bits 31:17, its demosaic needs the black level gone */
 const struct vfe_pp_desc vfe_pp_desc_780 = {
 	.wb_gain = 0x400 << 17,
@@ -428,6 +445,12 @@ static void vfe_setup_demosaic(struct vfe_device *vfe, const struct vfe_pp_desc 
 	writel_relaxed(0x00000000, vfe->base + IFE_WB_GAIN_WB_OFFSET_CFG_3);
 	writel_relaxed(0x00000000, vfe->base + IFE_WB_GAIN_WB_OFFSET_CFG_4);
 	writel_relaxed(0x00000000, vfe->base + IFE_WB_GAIN_WB_OFFSET_CFG_5);
+	if (desc->wb_clamp) {
+		writel_relaxed(IFE_680_WB_GAIN_CLAMP_CFG_0_VAL,
+			       vfe->base + IFE_680_WB_GAIN_CLAMP_CFG_0);
+		writel_relaxed(IFE_680_WB_GAIN_CLAMP_CFG_1_VAL,
+			       vfe->base + IFE_680_WB_GAIN_CLAMP_CFG_1);
+	}
 }
 
 /* Colour correction: channel permutation, no offsets */
