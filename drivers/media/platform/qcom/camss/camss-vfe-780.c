@@ -86,6 +86,16 @@ typedef enum {
 #define VFE_BUS_WM_MMU_PREFETCH_CFG(n)		(BUS_REG_BASE + 0x260 + (n) * 0x100)
 #define VFE_BUS_WM_MMU_PREFETCH_MAX_OFFSET(n)	(BUS_REG_BASE + 0x264 + (n) * 0x100)
 
+/*
+ * The 780/880 bus takes addresses and frame increments in 256 byte units
+ * (the downstream 36-bit IOVA interface). The IFE 680 on SM8450 takes them
+ * in bytes, as camss-vfe-680.c programs its RDIs.
+ */
+static u32 vfe_bus_addr(struct vfe_device *vfe, u32 val)
+{
+	return vfe->camss->res->version == CAMSS_8450 ? val : val >> 8;
+}
+
 /* Each write master of the PIX output writes one plane: Y, then CbCr at half height */
 static void vfe_output_start_pix(struct vfe_device *vfe, struct vfe_output *output)
 {
@@ -146,7 +156,7 @@ static void vfe_output_start_rdi(struct vfe_device *vfe, struct vfe_output *outp
 	struct v4l2_pix_format_mplane *pix = &output->video_out.active_fmt.fmt.pix_mp;
 	u8 wm = output->wm[0].bus_client;
 
-	writel(ALIGN(pix->plane_fmt[0].bytesperline, 16) * pix->height >> 8,
+	writel(vfe_bus_addr(vfe, ALIGN(pix->plane_fmt[0].bytesperline, 16) * pix->height),
 	       vfe->base + VFE_BUS_WM_FRAME_INCR(wm));
 
 	writel((WM_IMAGE_CFG_0_DEFAULT_WIDTH & 0xFFFF),
@@ -210,7 +220,7 @@ static void vfe_output_update(struct vfe_device *vfe, struct vfe_output *output,
 		else
 			addr = buf->addr[output->wm[i].plane];
 
-		writel(addr >> 8, vfe->base + VFE_BUS_WM_IMAGE_ADDR(wm));
+		writel(vfe_bus_addr(vfe, addr), vfe->base + VFE_BUS_WM_IMAGE_ADDR(wm));
 
 		dev_dbg(vfe->camss->dev, "wm:%d, image buf addr:0x%x\n",
 			wm, addr);
