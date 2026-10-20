@@ -17,6 +17,8 @@
 
 #include <drm/display/drm_dsc.h>
 #include <drm/display/drm_dsc_helper.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc.h>
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_modes.h>
 #include <drm/drm_panel.h>
@@ -40,7 +42,74 @@ struct tianma_nt37705 {
 
 	/* PWM dimming mode last sent: 0 low, 1 high, -1 unknown (after reset) */
 	int pwm_mode;
+
+	/* for the mode being enabled */
+	struct drm_connector *connector;
 };
+
+/*
+ * What the refresh rates change in the init sequence, from the
+ * timing@fhd_sdc_{144,120,90,60} nodes of the vendor device tree.
+ */
+struct tianma_nt37705_mode {
+	struct drm_display_mode mode;
+	u8 fre;		/* 2Fh before sleep out */
+	u8 ba;		/* BAh at offsets A8h and B0h */
+	u8 fre_on;	/* 2Fh before display on */
+	bool rate_60;	/* no TE before sleep out, 6Dh 01, BEh not sent */
+	bool c3_144;	/* last C3h group of the 144 Hz sequence */
+};
+
+#define TIANMA_NT37705_MODE(hbp, rate) {				\
+	.clock = (1240 + 64 + 8 + (hbp)) * (2772 + 2 + 2 + 8) * (rate) / 1000, \
+	.hdisplay = 1240,						\
+	.hsync_start = 1240 + 64,					\
+	.hsync_end = 1240 + 64 + 8,					\
+	.htotal = 1240 + 64 + 8 + (hbp),				\
+	.vdisplay = 2772,						\
+	.vsync_start = 2772 + 2,					\
+	.vsync_end = 2772 + 2 + 2,					\
+	.vtotal = 2772 + 2 + 2 + 8,					\
+	.width_mm = 70,							\
+	.height_mm = 156,						\
+	.type = DRM_MODE_TYPE_DRIVER,					\
+}
+
+/* The first one is the preferred mode */
+static const struct tianma_nt37705_mode tianma_nt37705_modes[] = {
+	{
+		.mode = TIANMA_NT37705_MODE(48, 144),
+		.fre = 0x02, .ba = 0x22, .fre_on = 0x30, .c3_144 = true,
+	}, {
+		.mode = TIANMA_NT37705_MODE(50, 120),
+		.fre = 0x00, .ba = 0x00, .fre_on = 0x30,
+	}, {
+		.mode = TIANMA_NT37705_MODE(49, 90),
+		.fre = 0x01, .ba = 0x11, .fre_on = 0x31,
+	}, {
+		.mode = TIANMA_NT37705_MODE(48, 60),
+		.fre = 0x00, .ba = 0x00, .fre_on = 0x30, .rate_60 = true,
+	},
+};
+
+static const struct tianma_nt37705_mode *
+tianma_nt37705_current_mode(struct tianma_nt37705 *ctx)
+{
+	const struct drm_display_mode *mode;
+	int i;
+
+	if (ctx->connector && ctx->connector->state &&
+	    ctx->connector->state->crtc) {
+		mode = &ctx->connector->state->crtc->state->mode;
+		for (i = 0; i < ARRAY_SIZE(tianma_nt37705_modes); i++)
+			if (drm_mode_match(mode, &tianma_nt37705_modes[i].mode,
+					   DRM_MODE_MATCH_TIMINGS |
+					   DRM_MODE_MATCH_CLOCK))
+				return &tianma_nt37705_modes[i];
+	}
+
+	return &tianma_nt37705_modes[0];
+}
 
 /* Enabled in this order, 1 ms apart (downstream qcom,supply-post-on-sleep) */
 static const struct regulator_bulk_data tianma_nt37705_supplies[] = {
@@ -153,6 +222,7 @@ static void tianma_nt37705_reset(struct tianma_nt37705 *ctx)
 static int tianma_nt37705_on(struct tianma_nt37705 *ctx)
 {
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
+	const struct tianma_nt37705_mode *m = tianma_nt37705_current_mode(ctx);
 
 	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
@@ -193,10 +263,12 @@ static int tianma_nt37705_on(struct tianma_nt37705 *ctx)
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x17, 0x10);
 	mipi_dsi_dcs_set_column_address_multi(&dsi_ctx, 0x0000, 0x04d7);
 	mipi_dsi_dcs_set_page_address_multi(&dsi_ctx, 0x0000, 0x0ad3);
-	/* Fre 144Hz */
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x2f, 0x02);
+	/* Frame rate */
+	mipi_dsi_dcs_write_var_seq_multi(&dsi_ctx, 0x2f, m->fre);
 	/* TE ON */
-	mipi_dsi_dcs_set_tear_on_multi(&dsi_ctx, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
+	if (!m->rate_60)
+		mipi_dsi_dcs_set_tear_on_multi(&dsi_ctx,
+					       MIPI_DSI_DCS_TEAR_MODE_VBLANK);
 	mipi_dsi_dcs_set_tear_scanline_multi(&dsi_ctx, 0x0000);
 	/* Nor 51 */
 	mipi_dsi_dcs_set_display_brightness_multi(&dsi_ctx, 0x0000);
@@ -281,17 +353,39 @@ static int tianma_nt37705_on(struct tianma_nt37705 *ctx)
 	mipi_dsi_msleep(&dsi_ctx, 128);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xf0,
 				     0x55, 0xaa, 0x52, 0x08, 0x00);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x2f, 0x02);
+	mipi_dsi_dcs_write_var_seq_multi(&dsi_ctx, 0x2f, m->fre);
 	mipi_dsi_usleep_range(&dsi_ctx, 17000, 18000);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xbe, 0x47);
+	if (!m->rate_60)
+		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xbe, 0x47);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x6f, 0xa8);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xba, 0x22, 0x22);
+	mipi_dsi_dcs_write_var_seq_multi(&dsi_ctx, 0xba, m->ba, m->ba);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x6f, 0xb0);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xba, 0x22, 0x22, 0x00, 0x00);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x2f, 0x30);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x6d, 0x00);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x35, 0x00, 0x00, 0x00, 0x00);
+	mipi_dsi_dcs_write_var_seq_multi(&dsi_ctx, 0xba, m->ba, m->ba, 0x00, 0x00);
+	mipi_dsi_dcs_write_var_seq_multi(&dsi_ctx, 0x2f, m->fre_on);
+	mipi_dsi_dcs_write_var_seq_multi(&dsi_ctx, 0x6d, m->rate_60 ? 0x01 : 0x00);
+	mipi_dsi_dcs_write_var_seq_multi(&dsi_ctx, 0x35, 0x00, 0x00, 0x00,
+				     m->rate_60 ? 0x01 : 0x00);
 	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
+	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xf0,
+				     0x55, 0xaa, 0x52, 0x08, 0x01);
+	if (m->c3_144) {
+		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xc3,
+					     0xdd, 0x06, 0x22, 0x10, 0xf4, 0x00, 0x06,
+					     0x20, 0x10, 0xff, 0x00, 0x03, 0xe8, 0x10,
+					     0x06, 0x1a, 0x15, 0x03, 0xe8, 0x10, 0x06,
+					     0x1a, 0x15, 0x03, 0xd3, 0x12, 0x06, 0x51,
+					     0x19, 0x03, 0xd3, 0x12, 0x06, 0x51, 0x19,
+					     0x03, 0xd3, 0x12, 0x06, 0x51, 0x19);
+	} else {
+		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xc3,
+					     0xdd, 0x06, 0x22, 0x10, 0xf4, 0x00, 0x06,
+					     0x20, 0x10, 0xff, 0x00, 0x03, 0xe8, 0x10,
+					     0x06, 0x1a, 0x15, 0x03, 0xe8, 0x10, 0x06,
+					     0x1a, 0x15, 0x03, 0xd3, 0x12, 0x06, 0x51,
+					     0x19, 0x03, 0xd3, 0x12, 0x06, 0x51, 0x19,
+					     0x03, 0xe8, 0x10, 0x06, 0x1a, 0x15);
+		mipi_dsi_usleep_range(&dsi_ctx, 17000, 18000);
+	}
 
 	return dsi_ctx.accum_err;
 }
@@ -374,25 +468,31 @@ static int tianma_nt37705_unprepare(struct drm_panel *panel)
 	return 0;
 }
 
-static const struct drm_display_mode tianma_nt37705_mode = {
-	.clock = (1240 + 64 + 8 + 48) * (2772 + 2 + 2 + 8) * 144 / 1000,
-	.hdisplay = 1240,
-	.hsync_start = 1240 + 64,
-	.hsync_end = 1240 + 64 + 8,
-	.htotal = 1240 + 64 + 8 + 48,
-	.vdisplay = 2772,
-	.vsync_start = 2772 + 2,
-	.vsync_end = 2772 + 2 + 2,
-	.vtotal = 2772 + 2 + 2 + 8,
-	.width_mm = 70,
-	.height_mm = 156,
-	.type = DRM_MODE_TYPE_DRIVER,
-};
-
 static int tianma_nt37705_get_modes(struct drm_panel *panel,
-							  struct drm_connector *connector)
+				    struct drm_connector *connector)
 {
-	return drm_connector_helper_get_modes_fixed(connector, &tianma_nt37705_mode);
+	struct tianma_nt37705 *ctx = to_tianma_nt37705(panel);
+	struct drm_display_mode *mode;
+	int i;
+
+	ctx->connector = connector;
+
+	for (i = 0; i < ARRAY_SIZE(tianma_nt37705_modes); i++) {
+		mode = drm_mode_duplicate(connector->dev,
+					  &tianma_nt37705_modes[i].mode);
+		if (!mode)
+			return i;
+
+		drm_mode_set_name(mode);
+		if (i == 0)
+			mode->type |= DRM_MODE_TYPE_PREFERRED;
+		drm_mode_probed_add(connector, mode);
+	}
+
+	connector->display_info.width_mm = tianma_nt37705_modes[0].mode.width_mm;
+	connector->display_info.height_mm = tianma_nt37705_modes[0].mode.height_mm;
+
+	return i;
 }
 
 static const struct drm_panel_funcs tianma_nt37705_panel_funcs = {
