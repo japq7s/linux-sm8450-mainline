@@ -17,6 +17,7 @@
 #include "camss.h"
 #include "camss-vfe.h"
 #include "camss-vfe-880-pp.h"
+#include "camss-vfe-680-tuning.h"
 
 /* Register offsets, named as in the IFE register map */
 #define IFE_TOP_CORE_CFG_0                                       0x00024
@@ -463,6 +464,7 @@ const struct vfe_pp_desc vfe_pp_desc_680 = {
 	.wb_gain_shift = 17,
 	.demux_bls = true,
 	.wb_clamp = true,
+	.tuning_680 = true,
 };
 
 /* IFE 780: Q10 gain held in bits 31:17, its demosaic needs the black level gone */
@@ -869,6 +871,77 @@ static void vfe_setup_ds16(struct vfe_device *vfe, u32 w, u32 h)
 }
 
 /* Called from vfe_line_prepare() for NV12, ahead of the write masters and the IPP reg update */
+/* IFE 680 CLC modules with DMI tables: base, then +0x08.. as for GLUT */
+#define IFE_680_BPC_BASE	0x3d00
+#define IFE_680_LSC_BASE	0x4300
+#define IFE_680_GIC_BASE	0x4700
+#define IFE_680_ABF_BASE	0x4900
+#define IFE_680_DMI_CFG		0x08
+#define IFE_680_DMI_LUT_CFG	0x0c
+#define IFE_680_DMI_DATA	0x10
+#define IFE_680_DMI_LUT_BANK	0x58
+#define IFE_680_MODULE_LUT_BANK	0x5c
+#define IFE_680_MODULE_CFG	0x60
+
+/* Module enables as the downstream stack sets them */
+#define IFE_680_BPC_CFG		0x00000203
+#define IFE_680_LSC_CFG		0x00003003
+#define IFE_680_GIC_CFG		0x00000203
+#define IFE_680_ABF_CFG		0x00000301
+
+/* The lens shading mesh: 17x13 points over this sensor frame */
+#define IFE_680_LSC_WIDTH	4096
+#define IFE_680_LSC_HEIGHT	3072
+
+static void vfe_680_write_dmi(struct vfe_device *vfe, u32 base, u32 lut,
+			      const u32 *data, unsigned int n)
+{
+	unsigned int i;
+
+	writel_relaxed(lut, vfe->base + base + IFE_680_DMI_LUT_CFG);
+	writel_relaxed(0, vfe->base + base + IFE_680_DMI_CFG);
+	for (i = 0; i < n; i++)
+		writel_relaxed(data[i], vfe->base + base + IFE_680_DMI_DATA);
+	writel_relaxed(0, vfe->base + base + IFE_680_DMI_LUT_CFG);
+}
+
+/*
+ * Bad pixel correction, lens shading, green imbalance and adaptive Bayer
+ * filter (denoise), with the configuration and tables the downstream camera
+ * stack uses on this IFE. The tables are fixed: they do not follow the gain
+ * or the illuminant. The shading mesh only matches its sensor frame, so it is
+ * left off for other sizes.
+ */
+static void vfe_680_setup_tuning(struct vfe_device *vfe, u32 in_w, u32 in_h)
+{
+	static const u32 bases[] = {
+		IFE_680_BPC_BASE, IFE_680_LSC_BASE, IFE_680_GIC_BASE, IFE_680_ABF_BASE,
+	};
+	bool lsc = in_w == IFE_680_LSC_WIDTH && in_h == IFE_680_LSC_HEIGHT;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(bases); i++) {
+		writel_relaxed(0, vfe->base + bases[i] + IFE_680_DMI_LUT_BANK);
+		writel_relaxed(0, vfe->base + bases[i] + IFE_680_MODULE_LUT_BANK);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(vfe_680_tuning_regs); i++)
+		writel_relaxed(vfe_680_tuning_regs[i][1], vfe->base + vfe_680_tuning_regs[i][0]);
+
+	vfe_680_write_dmi(vfe, IFE_680_LSC_BASE, 1, vfe_680_lsc_lut1, ARRAY_SIZE(vfe_680_lsc_lut1));
+	vfe_680_write_dmi(vfe, IFE_680_LSC_BASE, 2, vfe_680_lsc_lut2, ARRAY_SIZE(vfe_680_lsc_lut2));
+	vfe_680_write_dmi(vfe, IFE_680_LSC_BASE, 3, vfe_680_lsc_lut3, ARRAY_SIZE(vfe_680_lsc_lut3));
+	vfe_680_write_dmi(vfe, IFE_680_GIC_BASE, 1, vfe_680_gic_lut1, ARRAY_SIZE(vfe_680_gic_lut1));
+	vfe_680_write_dmi(vfe, IFE_680_GIC_BASE, 3, vfe_680_gic_lut3, ARRAY_SIZE(vfe_680_gic_lut3));
+	vfe_680_write_dmi(vfe, IFE_680_ABF_BASE, 1, vfe_680_abf_lut1, ARRAY_SIZE(vfe_680_abf_lut1));
+	vfe_680_write_dmi(vfe, IFE_680_ABF_BASE, 3, vfe_680_abf_lut3, ARRAY_SIZE(vfe_680_abf_lut3));
+
+	writel_relaxed(IFE_680_BPC_CFG, vfe->base + IFE_680_BPC_BASE + IFE_680_MODULE_CFG);
+	writel_relaxed(lsc ? IFE_680_LSC_CFG : 0, vfe->base + IFE_680_LSC_BASE + IFE_680_MODULE_CFG);
+	writel_relaxed(IFE_680_GIC_CFG, vfe->base + IFE_680_GIC_BASE + IFE_680_MODULE_CFG);
+	writel_relaxed(IFE_680_ABF_CFG, vfe->base + IFE_680_ABF_BASE + IFE_680_MODULE_CFG);
+}
+
 void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *desc,
 			      u32 in_w, u32 in_h, const struct v4l2_rect *compose,
 			      const struct v4l2_rect *crop, u32 code)
@@ -886,6 +959,8 @@ void vfe_880_setup_pixel_pipe(struct vfe_device *vfe, const struct vfe_pp_desc *
 	vfe_setup_aec_bhist(vfe, in_w, in_h);
 	vfe_setup_main_output_round_clamp(vfe);
 	vfe_setup_vid_crop(vfe, compose, crop);
+	if (desc->tuning_680)
+		vfe_680_setup_tuning(vfe, in_w, in_h);
 	vfe_setup_ds4(vfe, w, h);
 	vfe_setup_ds16(vfe, w, h);
 

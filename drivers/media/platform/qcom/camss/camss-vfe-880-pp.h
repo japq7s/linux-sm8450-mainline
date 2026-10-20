@@ -15,6 +15,7 @@ struct vfe_pp_desc {
 	u8 wb_gain_shift;	/* position of the 15uQ10 gain field */
 	bool demux_bls;	/* subtract the black level in demux + BLS */
 	bool wb_clamp;	/* the WB clamp resets to a value that clips green */
+	bool tuning_680;	/* BPC, LSC, GIC and ABF of the IFE 680 */
 };
 
 extern const struct vfe_pp_desc vfe_pp_desc_680;
