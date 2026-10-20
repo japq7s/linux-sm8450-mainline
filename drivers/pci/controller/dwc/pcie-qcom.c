@@ -1572,6 +1572,11 @@ static const struct qcom_pcie_ops ops_2_7_0 = {
  * The 1.9.0 cores run the aux clock (19.2 MHz) asynchronous to the core
  * clock, which is gated in L1.2: tell the core so, as the downstream driver
  * does when it enables L1 PM substates.
+ *
+ * The downstream driver also writes PARF_SYS_CTRL = 0x365e at init, which
+ * keeps the core clock ungated and the clocks requested in L1. The reset
+ * value (0x361c) lets the core drop them in L1; on SM8450 + WCN6855 the
+ * link then goes down on an L1.2 exit in about half of the boots.
  */
 static int qcom_pcie_post_init_1_9_0(struct qcom_pcie *pcie)
 {
@@ -1584,6 +1589,7 @@ static int qcom_pcie_post_init_1_9_0(struct qcom_pcie *pcie)
 
 	val = readl(pcie->parf + PARF_SYS_CTRL);
 	val &= ~L1SS_AUX_CLK_ASYNC_DIS;
+	val |= CORE_CLK_CGC_DIS | L1_CLK_RMV_DIS;
 	writel(val, pcie->parf + PARF_SYS_CTRL);
 
 	return 0;
