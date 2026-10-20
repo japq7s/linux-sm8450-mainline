@@ -128,6 +128,8 @@ struct cci {
 	struct clk_bulk_data *clocks;
 	int nclocks;
 	struct cci_master master[NUM_MASTERS];
+	/* masters waiting for the next RST_DONE_ACK */
+	unsigned long reset_masters;
 };
 
 static irqreturn_t cci_isr(int irq, void *dev)
@@ -141,8 +143,15 @@ static irqreturn_t cci_isr(int irq, void *dev)
 	writel(0x1, cci->base + CCI_IRQ_GLOBAL_CLEAR_CMD);
 
 	if (val & CCI_IRQ_STATUS_0_RST_DONE_ACK) {
-		complete(&cci->master[0].irq_complete);
-		if (cci->master[1].master)
+		unsigned long masters = xchg(&cci->reset_masters, 0);
+
+		/*
+		 * Only wake up the masters that were reset: a reset of one
+		 * master must not end a transfer that runs on the other one.
+		 */
+		if (masters & BIT(0))
+			complete(&cci->master[0].irq_complete);
+		if (masters & BIT(1))
 			complete(&cci->master[1].irq_complete);
 		ret = IRQ_HANDLED;
 	}
@@ -165,11 +174,13 @@ static irqreturn_t cci_isr(int irq, void *dev)
 
 	if (unlikely(val & CCI_IRQ_STATUS_0_I2C_M0_Q0Q1_HALT_ACK)) {
 		reset |= CCI_RESET_CMD_M0_MASK;
+		set_bit(0, &cci->reset_masters);
 		ret = IRQ_HANDLED;
 	}
 
 	if (unlikely(val & CCI_IRQ_STATUS_0_I2C_M1_Q0Q1_HALT_ACK)) {
 		reset |= CCI_RESET_CMD_M1_MASK;
+		set_bit(1, &cci->reset_masters);
 		ret = IRQ_HANDLED;
 	}
 
@@ -275,6 +286,7 @@ static int cci_reset(struct cci *cci)
 	 * master[0].xxx for waiting on it.
 	 */
 	reinit_completion(&cci->master[0].irq_complete);
+	set_bit(0, &cci->reset_masters);
 	writel(CCI_RESET_CMD_MASK, cci->base + CCI_RESET_CMD);
 
 	if (!wait_for_completion_timeout(&cci->master[0].irq_complete,
