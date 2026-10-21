@@ -832,10 +832,15 @@
 		/*
 		 * WLAN/BT aon. Always on so the chip is powered when the PCIe
 		 * link is trained, before the pwrseq module takes over.
+		 * Nothing sets its voltage, so the APPS vote is the minimum:
+		 * use the range of the downstream qcom,vdd-wlan-aon-config.
+		 * With 500 mV the WCN6855 only ran when another subsystem
+		 * voted the rail up (seen: 500 mV in standby, PCIe "Device
+		 * not found" and no answer from Bluetooth).
 		 */
 		vreg_s2e_0p85: smps2 {
 			regulator-name = "vreg_s2e_0p85";
-			regulator-min-microvolt = <500000>;
+			regulator-min-microvolt = <1012000>;
 			regulator-max-microvolt = <1040000>;
 			regulator-always-on;
 		};
