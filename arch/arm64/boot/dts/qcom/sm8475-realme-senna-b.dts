@@ -904,6 +904,20 @@
 	};
 };
 
+/*
+ * camss sets the IFE clock straight through the clock framework and votes no
+ * rail level, so the only MMCX/MXC vote while the camera runs is the one of
+ * the clock controller. The pixel path runs the IFE at its top rate (727 MHz
+ * measured), which downstream runs at "nominal" (ife clock-cntl-level), but
+ * the rails stayed at low_svs (perf state 64) - and the phone hung a few
+ * minutes into camera use. Vote nominal while any camcc clock is in use; the
+ * clock controller is runtime suspended, with no vote, when the camera is off.
+ */
+&camcc {
+	required-opps = <&rpmhpd_opp_nom>,
+			<&rpmhpd_opp_nom>;
+};
+
 &camss {
 	/* downstream csiphy csi-vdd-0p9 = pm8350_l5, csi-vdd-1p2 = pm8350c_l10 */
 	vdda-phy-supply = <&vreg_l5b_0p88>;
