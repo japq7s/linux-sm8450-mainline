@@ -684,6 +684,14 @@ static int tianma_nt37705_probe(struct mipi_dsi_device *dsi)
 	mipi_dsi_set_drvdata(dsi, ctx);
 
 	dsi->lanes = 4;
+	/*
+	 * qcom,mdss-dsi-panel-clockrate of the 60, 90 and 120 Hz vendor
+	 * timings: the panel wants each frame well within the frame time
+	 * (mdp-transfer-time-us 9000 at 90 Hz), not spread over all of it.
+	 * At 90 Hz a link run at the refresh rate's pace left the panel at
+	 * about 60 Hz. The 144 Hz mode needs a faster link anyway.
+	 */
+	dsi->hs_rate = 998400000;
 	dsi->format = MIPI_DSI_FMT_RGB888;
 	dsi->mode_flags = MIPI_DSI_MODE_NO_EOT_PACKET |
 			  MIPI_DSI_CLOCK_NON_CONTINUOUS;
