@@ -1243,6 +1243,21 @@ static int imx355_probe(struct i2c_client *client)
 
 	/* Check module identity */
 	ret = imx355_identify_module(imx355);
+	if (ret == -ETIMEDOUT) {
+		/*
+		 * On a shared Qualcomm CCI the first access after power on
+		 * times out now and then (about one boot in 25 on the realme
+		 * GT Neo5); the bus is reset by then. Power cycle the sensor
+		 * and try once more.
+		 */
+		dev_warn(imx355->dev, "sensor not answering, retrying\n");
+		imx355_power_off(imx355->dev);
+		usleep_range(5000, 6000);
+		ret = imx355_power_on(imx355->dev);
+		if (ret)
+			return ret;
+		ret = imx355_identify_module(imx355);
+	}
 	if (ret) {
 		dev_err(imx355->dev, "failed to find sensor: %d", ret);
 		goto error_power_off;
