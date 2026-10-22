@@ -57,7 +57,6 @@ struct tianma_nt37705_mode {
 	u8 ba;		/* BAh at offsets A8h and B0h */
 	u8 fre_on;	/* 2Fh before display on */
 	bool rate_60;	/* no TE before sleep out, 6Dh 01, BEh not sent */
-	bool c3_144;	/* last C3h group of the 144 Hz sequence */
 };
 
 #define TIANMA_NT37705_MODE(hbp, rate) {				\
@@ -79,7 +78,7 @@ struct tianma_nt37705_mode {
 static const struct tianma_nt37705_mode tianma_nt37705_modes[] = {
 	{
 		.mode = TIANMA_NT37705_MODE(48, 144),
-		.fre = 0x02, .ba = 0x22, .fre_on = 0x30, .c3_144 = true,
+		.fre = 0x02, .ba = 0x22, .fre_on = 0x30,
 	}, {
 		.mode = TIANMA_NT37705_MODE(50, 120),
 		.fre = 0x00, .ba = 0x00, .fre_on = 0x30,
@@ -365,27 +364,14 @@ static int tianma_nt37705_on(struct tianma_nt37705 *ctx)
 	mipi_dsi_dcs_write_var_seq_multi(&dsi_ctx, 0x6d, m->rate_60 ? 0x01 : 0x00);
 	mipi_dsi_dcs_write_var_seq_multi(&dsi_ctx, 0x35, 0x00, 0x00, 0x00,
 				     m->rate_60 ? 0x01 : 0x00);
+	/*
+	 * The vendor on-commands of every refresh rate end here. The C3h
+	 * group that follows display on in qcom,mdss-dsi-timing-switch-command
+	 * belongs to a switch between rates only: sent after display on, the
+	 * panel stopped answering after minutes of use (no TE, kickoff
+	 * timeouts, DSI command DMA timeouts).
+	 */
 	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xf0,
-				     0x55, 0xaa, 0x52, 0x08, 0x01);
-	if (m->c3_144) {
-		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xc3,
-					     0xdd, 0x06, 0x22, 0x10, 0xf4, 0x00, 0x06,
-					     0x20, 0x10, 0xff, 0x00, 0x03, 0xe8, 0x10,
-					     0x06, 0x1a, 0x15, 0x03, 0xe8, 0x10, 0x06,
-					     0x1a, 0x15, 0x03, 0xd3, 0x12, 0x06, 0x51,
-					     0x19, 0x03, 0xd3, 0x12, 0x06, 0x51, 0x19,
-					     0x03, 0xd3, 0x12, 0x06, 0x51, 0x19);
-	} else {
-		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xc3,
-					     0xdd, 0x06, 0x22, 0x10, 0xf4, 0x00, 0x06,
-					     0x20, 0x10, 0xff, 0x00, 0x03, 0xe8, 0x10,
-					     0x06, 0x1a, 0x15, 0x03, 0xe8, 0x10, 0x06,
-					     0x1a, 0x15, 0x03, 0xd3, 0x12, 0x06, 0x51,
-					     0x19, 0x03, 0xd3, 0x12, 0x06, 0x51, 0x19,
-					     0x03, 0xe8, 0x10, 0x06, 0x1a, 0x15);
-		mipi_dsi_usleep_range(&dsi_ctx, 17000, 18000);
-	}
 
 	return dsi_ctx.accum_err;
 }
