@@ -122,6 +122,7 @@ static DEFINE_XARRAY_ALLOC(qrtr_ports);
  * @qrtr_tx_flow: xarray of qrtr_tx_flow, keyed by node << 32 | port
  * @qrtr_tx_lock: lock for qrtr_tx_flow inserts
  * @hello_sent: hello packet send successful
+ * @hello_lock: serialises sending the hello packet
  * @rx_queue: receive queue
  * @item: list item for broadcast list
  * @say_hello: delayed work for sending hello packet
@@ -136,6 +137,7 @@ struct qrtr_node {
 	struct mutex qrtr_tx_lock; /* for qrtr_tx_flow */
 
 	bool hello_sent;
+	struct mutex hello_lock;
 
 	struct sk_buff_head rx_queue;
 	struct list_head item;
@@ -340,6 +342,8 @@ static void qrtr_tx_flow_failed(struct qrtr_node *node, int dest_node,
 	}
 }
 
+static int qrtr_send_hello(struct qrtr_node *node);
+
 /* Pass an outgoing packet socket buffer to the endpoint driver. */
 static int qrtr_node_enqueue(struct qrtr_node *node, struct sk_buff *skb,
 			     int type, struct sockaddr_qrtr *from,
@@ -347,15 +351,25 @@ static int qrtr_node_enqueue(struct qrtr_node *node, struct sk_buff *skb,
 {
 	struct qrtr_hdr_v1 *hdr;
 	size_t len = skb->len;
+	bool hello_sent;
 	int rc, confirm_rx;
 
 	mutex_lock(&node->ep_lock);
-	if (!node->hello_sent && type != QRTR_TYPE_HELLO) {
-		mutex_unlock(&node->ep_lock);
+	hello_sent = node->hello_sent;
+	mutex_unlock(&node->ep_lock);
+
+	/*
+	 * The remote can say HELLO before say_hello has run, and the name
+	 * service then answers with the list of its servers. Dropping that
+	 * answer made the name service stop announcing: a restarted modem
+	 * never learnt of rmtfs and tqftpserv, stalled in its initialisation
+	 * and was reset by its watchdog 40 s later, again and again. Send
+	 * the HELLO first instead.
+	 */
+	if (!hello_sent && type != QRTR_TYPE_HELLO && qrtr_send_hello(node)) {
 		kfree_skb(skb);
 		return -EAGAIN;
 	}
-	mutex_unlock(&node->ep_lock);
 
 	confirm_rx = qrtr_tx_wait(node, to->sq_node, to->sq_port, type);
 	if (confirm_rx < 0) {
@@ -591,36 +605,62 @@ static struct sk_buff *qrtr_alloc_ctrl_packet(struct qrtr_ctrl_pkt **pkt,
 	return skb;
 }
 
-static void qrtr_hello_work(struct work_struct *work)
+/* Send the HELLO to @node unless it has been sent already */
+static int qrtr_send_hello(struct qrtr_node *node)
 {
 	struct sockaddr_qrtr from = {AF_QIPCRTR, 0, QRTR_PORT_CTRL};
 	struct sockaddr_qrtr to = {AF_QIPCRTR, 0, QRTR_PORT_CTRL};
 	struct qrtr_ctrl_pkt *pkt;
-	struct qrtr_node *node;
 	struct qrtr_sock *ctrl;
 	struct sk_buff *skb;
+	bool hello_sent;
+	int rc;
 
-	node = container_of(to_delayed_work(work), struct qrtr_node, say_hello);
+	mutex_lock(&node->hello_lock);
 
-	/* NS must be bound before we can send; retry with backoff if not ready */
+	mutex_lock(&node->ep_lock);
+	hello_sent = node->hello_sent;
+	mutex_unlock(&node->ep_lock);
+	if (hello_sent) {
+		rc = 0;
+		goto out;
+	}
+
+	/* NS must be bound before we can send */
 	ctrl = qrtr_port_lookup(QRTR_PORT_CTRL);
 	if (!ctrl) {
-		schedule_delayed_work(&node->say_hello, msecs_to_jiffies(100));
-		return;
+		rc = -EAGAIN;
+		goto out;
 	}
 
 	skb = qrtr_alloc_ctrl_packet(&pkt, GFP_KERNEL);
 	if (!skb) {
 		qrtr_port_put(ctrl);
-		schedule_delayed_work(&node->say_hello, msecs_to_jiffies(100));
-		return;
+		rc = -ENOMEM;
+		goto out;
 	}
 
 	pkt->cmd = cpu_to_le32(QRTR_TYPE_HELLO);
 	from.sq_node = qrtr_local_nid;
 	to.sq_node = node->nid;
-	qrtr_node_enqueue(node, skb, QRTR_TYPE_HELLO, &from, &to);
+	rc = qrtr_node_enqueue(node, skb, QRTR_TYPE_HELLO, &from, &to);
 	qrtr_port_put(ctrl);
+out:
+	mutex_unlock(&node->hello_lock);
+	return rc;
+}
+
+static void qrtr_hello_work(struct work_struct *work)
+{
+	struct qrtr_node *node;
+	int rc;
+
+	node = container_of(to_delayed_work(work), struct qrtr_node, say_hello);
+
+	/* Retry with backoff if the NS is not bound yet or out of memory */
+	rc = qrtr_send_hello(node);
+	if (rc == -EAGAIN || rc == -ENOMEM)
+		schedule_delayed_work(&node->say_hello, msecs_to_jiffies(100));
 }
 
 /* Trigger the HELLO handshake after the remote has been reset, eg on resume */
@@ -662,6 +702,7 @@ int qrtr_endpoint_register(struct qrtr_endpoint *ep, unsigned int nid)
 	node->ep = ep;
 
 	node->hello_sent = false;
+	mutex_init(&node->hello_lock);
 	INIT_DELAYED_WORK(&node->say_hello, qrtr_hello_work);
 
 	xa_init(&node->qrtr_tx_flow);
