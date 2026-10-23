@@ -905,6 +905,224 @@
 };
 
 /*
+ * The SoC limits are 90 (CPU) and 85 C (GPU), with the CPUs throttled only by
+ * LMh near them: a game kept the phone too hot to hold. Throttle from 70 C,
+ * as the stock thermal engine does well below the junction limits: the
+ * first passive trip of every CPU and GPU sensor, polled every 100 ms while
+ * mitigating, scales the cluster of that sensor (the GPU zones are already
+ * mapped to the GPU).
+ */
+&cpu0_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu0-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu0_alert0>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu1_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu1-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu1_alert0>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu2_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu2-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu2_alert0>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu3_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu3-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu3_alert0>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu4_top_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu4-top-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu4_top_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu4_bottom_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu4-bottom-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu4_bottom_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu5_top_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu5-top-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu5_top_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu5_bottom_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu5-bottom-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu5_bottom_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu6_top_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu6-top-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu6_top_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu6_bottom_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu6-bottom-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu6_bottom_alert0>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu7_top_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu7-top-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu7_top_alert0>;
+			cooling-device = <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu7_middle_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu7-middle-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu7_middle_alert0>;
+			cooling-device = <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&cpu7_bottom_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/cpu7-bottom-thermal} {
+	polling-delay-passive = <100>;
+
+	cooling-maps {
+		map0 {
+			trip = <&cpu7_bottom_alert0>;
+			cooling-device = <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&gpu_top_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/gpu-top-thermal} {
+	polling-delay-passive = <100>;
+};
+
+&gpu_bottom_alert0 {
+	temperature = <70000>;
+};
+
+&{/thermal-zones/gpu-bottom-thermal} {
+	polling-delay-passive = <100>;
+};
+/*
  * camss sets the IFE clock straight through the clock framework and votes no
  * rail level, so the only MMCX/MXC vote while the camera runs is the one of
  * the clock controller. The pixel path runs the IFE at its top rate (727 MHz
