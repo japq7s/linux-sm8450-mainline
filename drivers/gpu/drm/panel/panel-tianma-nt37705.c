@@ -671,13 +671,16 @@ static int tianma_nt37705_probe(struct mipi_dsi_device *dsi)
 
 	dsi->lanes = 4;
 	/*
-	 * qcom,mdss-dsi-panel-clockrate of the 60, 90 and 120 Hz vendor
-	 * timings: the panel wants each frame well within the frame time
-	 * (mdp-transfer-time-us 9000 at 90 Hz), not spread over all of it.
-	 * At 90 Hz a link run at the refresh rate's pace left the panel at
-	 * about 60 Hz. The 144 Hz mode needs a faster link anyway.
+	 * qcom,mdss-dsi-panel-clockrate of the 144 Hz vendor timing, the
+	 * preferred mode. The panel wants each frame well within the frame
+	 * time (mdp-transfer-time-us 5000 at 144 Hz, 9000 at 90 Hz), not
+	 * spread over all of it: a link run at the refresh rate's pace left
+	 * the panel at about 60 Hz at 90 Hz. The 998.4 MHz of the 60, 90 and
+	 * 120 Hz timings is too slow at 144 Hz: a frame then takes 6.9 ms of
+	 * the 6.94 ms frame time, and now and then the DPU never got the
+	 * frame done again, freezing the display.
 	 */
-	dsi->hs_rate = 998400000;
+	dsi->hs_rate = 1148000000;
 	dsi->format = MIPI_DSI_FMT_RGB888;
 	dsi->mode_flags = MIPI_DSI_MODE_NO_EOT_PACKET |
 			  MIPI_DSI_CLOCK_NON_CONTINUOUS;
