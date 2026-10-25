@@ -373,6 +373,8 @@ static int tianma_nt37705_on(struct tianma_nt37705 *ctx)
 	 */
 	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
 
+	ctx->dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+
 	return dsi_ctx.accum_err;
 }
 
@@ -579,8 +581,6 @@ static int tianma_nt37705_bl_update_status(struct backlight_device *bl)
 		ctx->pwm_mode = mode;
 	}
 
-	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
-
 	return 0;
 }
 
@@ -595,8 +595,6 @@ static int tianma_nt37705_bl_get_brightness(struct backlight_device *bl)
 	ret = mipi_dsi_dcs_get_display_brightness_large(dsi, &brightness);
 	if (ret < 0)
 		return ret;
-
-	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
 	return brightness;
 }
