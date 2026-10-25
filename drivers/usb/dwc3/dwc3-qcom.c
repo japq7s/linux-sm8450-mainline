@@ -10,6 +10,7 @@
 #include <linux/irq.h>
 #include <linux/of_clk.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/kernel.h>
 #include <linux/interconnect.h>
 #include <linux/platform_device.h>
@@ -85,6 +86,11 @@ struct dwc3_qcom {
 	struct icc_path		*icc_path_apps;
 
 	enum usb_role		current_role;
+
+	/* Serialises the role notifier against system suspend and resume */
+	struct mutex		pm_lock;
+	bool			vbus_override_pending;
+	bool			vbus_override_on;
 };
 
 #define to_dwc3_qcom(d) container_of((d), struct dwc3_qcom, dwc)
@@ -570,10 +576,22 @@ static void dwc3_qcom_set_role_notifier(struct dwc3 *dwc, enum usb_role next_rol
 		return;
 	}
 
-	if (qcom->current_role == USB_ROLE_DEVICE)
-		dwc3_qcom_vbus_override_enable(qcom, false);
-	else if (qcom->current_role != USB_ROLE_DEVICE)
-		dwc3_qcom_vbus_override_enable(qcom, true);
+	/*
+	 * A Type-C partner change, e.g. a cable plugged in while the system
+	 * sleeps, switches the role from a non-freezable workqueue while the
+	 * glue is system suspended. Runtime PM is disabled then and does not
+	 * turn the clocks back on, and a QSCRATCH access hangs the bus, so
+	 * leave the write to the system resume.
+	 */
+	mutex_lock(&qcom->pm_lock);
+	if (qcom->pm_suspended) {
+		qcom->vbus_override_pending = true;
+		qcom->vbus_override_on = qcom->current_role != USB_ROLE_DEVICE;
+	} else {
+		dwc3_qcom_vbus_override_enable(qcom,
+					       qcom->current_role != USB_ROLE_DEVICE);
+	}
+	mutex_unlock(&qcom->pm_lock);
 
 	pm_runtime_mark_last_busy(qcom->dev);
 	pm_runtime_put_sync(qcom->dev);
@@ -698,6 +716,7 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
 			qcom->current_role = USB_ROLE_DEVICE;
 	}
 
+	mutex_init(&qcom->pm_lock);
 	qcom->dwc.glue_ops = &dwc3_qcom_glue_ops;
 
 	qcom->dwc.dev = dev;
@@ -756,13 +775,13 @@ static int dwc3_qcom_pm_suspend(struct device *dev)
 	if (ret)
 		return ret;
 
+	mutex_lock(&qcom->pm_lock);
 	ret = dwc3_qcom_suspend(qcom, wakeup);
-	if (ret)
-		return ret;
+	if (!ret)
+		qcom->pm_suspended = true;
+	mutex_unlock(&qcom->pm_lock);
 
-	qcom->pm_suspended = true;
-
-	return 0;
+	return ret;
 }
 
 static int dwc3_qcom_pm_resume(struct device *dev)
@@ -772,11 +791,20 @@ static int dwc3_qcom_pm_resume(struct device *dev)
 	bool wakeup = device_may_wakeup(dev);
 	int ret;
 
+	mutex_lock(&qcom->pm_lock);
 	ret = dwc3_qcom_resume(qcom, wakeup);
-	if (ret)
+	if (ret) {
+		mutex_unlock(&qcom->pm_lock);
 		return ret;
+	}
+
+	if (qcom->vbus_override_pending) {
+		dwc3_qcom_vbus_override_enable(qcom, qcom->vbus_override_on);
+		qcom->vbus_override_pending = false;
+	}
 
 	qcom->pm_suspended = false;
+	mutex_unlock(&qcom->pm_lock);
 
 	ret = dwc3_pm_resume(&qcom->dwc);
 	if (ret)
