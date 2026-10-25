@@ -65,7 +65,14 @@ static irqreturn_t a6xx_hfi_irq(int irq, void *data)
 	u32 status;
 
 	status = gmu_read(gmu, REG_A6XX_GMU_GMU2HOST_INTR_INFO);
-	gmu_write(gmu, REG_A6XX_GMU_GMU2HOST_INTR_CLR, status);
+
+	/*
+	 * Only clear what is handled here. The message queue bit and the OOB
+	 * acks are polled for by the HFI and OOB code; clearing them here
+	 * makes those waits time out although the GMU did respond.
+	 */
+	gmu_write(gmu, REG_A6XX_GMU_GMU2HOST_INTR_CLR,
+		  status & A6XX_GMU_GMU2HOST_INTR_INFO_CM3_FAULT);
 
 	if (status & A6XX_GMU_GMU2HOST_INTR_INFO_CM3_FAULT) {
 		dev_err_ratelimited(gmu->dev, "GMU firmware fault\n");
