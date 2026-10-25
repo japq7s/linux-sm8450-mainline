@@ -682,8 +682,10 @@ static int tianma_nt37705_probe(struct mipi_dsi_device *dsi)
 	 */
 	dsi->hs_rate = 1148000000;
 	dsi->format = MIPI_DSI_FMT_RGB888;
+	/* qcom,mdss-dsc-slice-per-pkt = <2> in every vendor timing */
 	dsi->mode_flags = MIPI_DSI_MODE_NO_EOT_PACKET |
-			  MIPI_DSI_CLOCK_NON_CONTINUOUS;
+			  MIPI_DSI_CLOCK_NON_CONTINUOUS |
+			  MIPI_DSI_MODE_DSC_ALL_SLICES_IN_PKT;
 
 	ctx->panel.prepare_prev_first = true;
 
