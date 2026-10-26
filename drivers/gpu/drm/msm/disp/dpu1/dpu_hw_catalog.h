@@ -510,6 +510,7 @@ struct dpu_dsc_cfg {
  * @intr_underrun:	index for INTF underrun interrupt
  * @intr_vsync:	        index for INTF VSYNC interrupt
  * @intr_tear_rd_ptr:  Index for INTF TEAR_RD_PTR interrupt
+ * @intr_tear_wr_ptr:  Index for INTF TEAR_WR_PTR interrupt
  */
 struct dpu_intf_cfg  {
 	DPU_HW_BLK_INFO;
@@ -519,6 +520,7 @@ struct dpu_intf_cfg  {
 	unsigned int intr_underrun;
 	unsigned int intr_vsync;
 	unsigned int intr_tear_rd_ptr;
+	unsigned int intr_tear_wr_ptr;
 };
 
 /**

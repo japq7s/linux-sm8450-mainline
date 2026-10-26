@@ -126,6 +126,7 @@ struct dpu_encoder_phys_ops {
  * @INTR_IDX_PINGPONG: Pingpong done interrupt for cmd mode panel
  * @INTR_IDX_UNDERRUN: Underrun interrupt for video and cmd mode panel
  * @INTR_IDX_RDPTR:    Readpointer done interrupt for cmd mode panel
+ * @INTR_IDX_WRPTR:    Writepointer start interrupt for cmd mode panel
  * @INTR_IDX_WB_DONE:  Writeback done interrupt for virtual connector
  */
 enum dpu_intr_idx {
@@ -134,6 +135,7 @@ enum dpu_intr_idx {
 	INTR_IDX_UNDERRUN,
 	INTR_IDX_CTL_START,
 	INTR_IDX_RDPTR,
+	INTR_IDX_WRPTR,
 	INTR_IDX_WB_DONE,
 	INTR_IDX_MAX,
 };
@@ -238,6 +240,8 @@ struct dpu_encoder_phys_wb {
  * @pp_timeout_report_cnt: number of pingpong done irq timeout errors
  * @pending_vblank_cnt: Atomic counter tracking pending wait for VBLANK
  * @pending_vblank_wq: Wait queue for blocking until VBLANK received
+ * @pending_wr_ptr_cnt: Atomic counter of triggered frames whose transfer
+ *			has not started yet (write pointer irq not seen)
  */
 struct dpu_encoder_phys_cmd {
 	struct dpu_encoder_phys base;
@@ -246,6 +250,7 @@ struct dpu_encoder_phys_cmd {
 	int pp_timeout_report_cnt;
 	atomic_t pending_vblank_cnt;
 	wait_queue_head_t pending_vblank_wq;
+	atomic_t pending_wr_ptr_cnt;
 };
 
 /**

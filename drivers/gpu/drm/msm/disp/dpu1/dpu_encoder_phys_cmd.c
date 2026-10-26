@@ -46,6 +46,20 @@ static bool dpu_encoder_phys_cmd_is_master(struct dpu_encoder_phys *phys_enc)
 	return (phys_enc->split_role != ENC_ROLE_SLAVE);
 }
 
+/*
+ * Posted start: trigger frame N+1 while frame N is still being transferred to
+ * the panel. The CTL holds the start until the transfer is over and the next
+ * TE arrives, so a commit only has to wait for the previous frame to start
+ * (write pointer irq), not for it to finish (pp_done). Without it, a panel
+ * whose transfer fills most of the TE period misses every other TE.
+ * Used where the interface reports the write pointer.
+ */
+static bool dpu_encoder_phys_cmd_posted_start(struct dpu_encoder_phys *phys_enc)
+{
+	return phys_enc->irq[INTR_IDX_WRPTR] &&
+	       dpu_encoder_phys_cmd_is_master(phys_enc);
+}
+
 static void _dpu_encoder_phys_cmd_update_intf_cfg(
 		struct dpu_encoder_phys *phys_enc)
 {
@@ -106,9 +120,27 @@ static void dpu_encoder_phys_cmd_pp_tx_done_irq(void *arg)
 					  phys_enc->hw_pp->idx - PINGPONG_0,
 					  new_cnt, event);
 
+	/*
+	 * With posted start the next frame may already be queued in the CTL;
+	 * the frame done above cleared the busy state, keep it set for that one.
+	 */
+	if (dpu_encoder_phys_cmd_posted_start(phys_enc) &&
+	    atomic_read(&phys_enc->pending_kickoff_cnt))
+		dpu_encoder_frame_still_pending(phys_enc->parent, phys_enc);
+
 	/* Signal any waiting atomic commit thread */
 	wake_up_all(&phys_enc->pending_kickoff_wq);
 	DPU_ATRACE_END("pp_done_irq");
+}
+
+static void dpu_encoder_phys_cmd_wr_ptr_irq(void *arg)
+{
+	struct dpu_encoder_phys *phys_enc = arg;
+	struct dpu_encoder_phys_cmd *cmd_enc = to_dpu_encoder_phys_cmd(phys_enc);
+
+	/* the transfer of the oldest triggered frame has started */
+	atomic_add_unless(&cmd_enc->pending_wr_ptr_cnt, -1, 0);
+	wake_up_all(&phys_enc->pending_kickoff_wq);
 }
 
 static void dpu_encoder_phys_cmd_te_rd_ptr_irq(void *arg)
@@ -155,10 +187,13 @@ static void dpu_encoder_phys_cmd_atomic_mode_set(
 
 	phys_enc->irq[INTR_IDX_PINGPONG] = phys_enc->hw_pp->caps->intr_done;
 
-	if (phys_enc->has_intf_te)
+	if (phys_enc->has_intf_te) {
 		phys_enc->irq[INTR_IDX_RDPTR] = phys_enc->hw_intf->cap->intr_tear_rd_ptr;
-	else
+		phys_enc->irq[INTR_IDX_WRPTR] = phys_enc->hw_intf->cap->intr_tear_wr_ptr;
+	} else {
 		phys_enc->irq[INTR_IDX_RDPTR] = phys_enc->hw_pp->caps->intr_rdptr;
+		phys_enc->irq[INTR_IDX_WRPTR] = 0;
+	}
 
 	phys_enc->irq[INTR_IDX_UNDERRUN] = phys_enc->hw_intf->cap->intr_underrun;
 }
@@ -205,6 +240,7 @@ static int _dpu_encoder_phys_cmd_handle_ppdone_timeout(
 	}
 
 	atomic_add_unless(&phys_enc->pending_kickoff_cnt, -1, 0);
+	atomic_set(&cmd_enc->pending_wr_ptr_cnt, 0);
 
 	/* request a ctl reset before the next kickoff */
 	phys_enc->enable_state = DPU_ENC_ERR_NEEDS_HW_RESET;
@@ -322,6 +358,12 @@ static void dpu_encoder_phys_cmd_irq_enable(struct dpu_encoder_phys *phys_enc)
 					       phys_enc->irq[INTR_IDX_CTL_START],
 					       dpu_encoder_phys_cmd_ctl_start_irq,
 					       phys_enc);
+
+	if (dpu_encoder_phys_cmd_is_master(phys_enc) && phys_enc->irq[INTR_IDX_WRPTR])
+		dpu_core_irq_register_callback(phys_enc->dpu_kms,
+					       phys_enc->irq[INTR_IDX_WRPTR],
+					       dpu_encoder_phys_cmd_wr_ptr_irq,
+					       phys_enc);
 }
 
 static void dpu_encoder_phys_cmd_irq_disable(struct dpu_encoder_phys *phys_enc)
@@ -329,6 +371,10 @@ static void dpu_encoder_phys_cmd_irq_disable(struct dpu_encoder_phys *phys_enc)
 	trace_dpu_enc_phys_cmd_irq_disable(DRMID(phys_enc->parent),
 					   phys_enc->hw_pp->idx - PINGPONG_0,
 					   phys_enc->vblank_refcount);
+
+	if (dpu_encoder_phys_cmd_is_master(phys_enc) && phys_enc->irq[INTR_IDX_WRPTR])
+		dpu_core_irq_unregister_callback(phys_enc->dpu_kms,
+						 phys_enc->irq[INTR_IDX_WRPTR]);
 
 	if (dpu_encoder_phys_cmd_is_master(phys_enc) && phys_enc->irq[INTR_IDX_CTL_START])
 		dpu_core_irq_unregister_callback(phys_enc->dpu_kms,
@@ -398,6 +444,8 @@ static void dpu_encoder_phys_cmd_tearcheck_config(
 	tc_cfg.sync_threshold_continue = DEFAULT_TEARCHECK_SYNC_THRESH_CONTINUE;
 	tc_cfg.start_pos = mode->vdisplay;
 	tc_cfg.rd_ptr_irq = mode->vdisplay + 1;
+	/* write pointer irq on the first line: the frame transfer has started */
+	tc_cfg.wr_ptr_irq = 1;
 
 	DPU_DEBUG_CMDENC(cmd_enc,
 		"tc vsync_clk_speed_hz %lu vtotal %u vrefresh %u\n",
@@ -484,6 +532,7 @@ static void dpu_encoder_phys_cmd_enable(struct dpu_encoder_phys *phys_enc)
 		return;
 	}
 
+	atomic_set(&cmd_enc->pending_wr_ptr_cnt, 0);
 	dpu_encoder_phys_cmd_enable_helper(phys_enc);
 	phys_enc->enable_state = DPU_ENC_ENABLED;
 }
@@ -595,9 +644,16 @@ static void dpu_encoder_phys_cmd_prepare_for_kickoff(
 
 	/*
 	 * Mark kickoff request as outstanding. If there are more than one,
-	 * outstanding, then we have to wait for the previous one to complete
+	 * outstanding, then we have to wait for the previous one to complete.
+	 * With posted start one frame may still be transferring: the CTL
+	 * queues this one behind it, so only wait when two are outstanding.
 	 */
-	ret = _dpu_encoder_phys_cmd_wait_for_idle(phys_enc);
+	ret = 0;
+	if (!dpu_encoder_phys_cmd_posted_start(phys_enc) ||
+	    !wait_event_timeout(phys_enc->pending_kickoff_wq,
+				atomic_read(&phys_enc->pending_kickoff_cnt) <= 1,
+				msecs_to_jiffies(KICKOFF_TIMEOUT_MS)))
+		ret = _dpu_encoder_phys_cmd_wait_for_idle(phys_enc);
 	if (ret) {
 		/* force pending_kickoff_cnt 0 to discard failed kickoff */
 		atomic_set(&phys_enc->pending_kickoff_cnt, 0);
@@ -680,12 +736,45 @@ static int dpu_encoder_phys_cmd_wait_for_tx_complete(
 	return rc;
 }
 
+static int _dpu_encoder_phys_cmd_wait_for_wr_ptr(
+		struct dpu_encoder_phys *phys_enc)
+{
+	struct dpu_encoder_phys_cmd *cmd_enc =
+			to_dpu_encoder_phys_cmd(phys_enc);
+	struct dpu_encoder_wait_info wait_info;
+	int ret;
+
+	wait_info.wq = &phys_enc->pending_kickoff_wq;
+	wait_info.atomic_cnt = &cmd_enc->pending_wr_ptr_cnt;
+	wait_info.timeout_ms = KICKOFF_TIMEOUT_MS;
+
+	ret = dpu_encoder_helper_wait_for_irq(phys_enc,
+			phys_enc->irq[INTR_IDX_WRPTR],
+			dpu_encoder_phys_cmd_wr_ptr_irq,
+			&wait_info);
+	if (ret == -ETIMEDOUT) {
+		/* the frame never started, fall back to waiting for it to finish */
+		DPU_ERROR_CMDENC(cmd_enc, "wr_ptr interrupt wait failed\n");
+		atomic_set(&cmd_enc->pending_wr_ptr_cnt, 0);
+		return dpu_encoder_phys_cmd_wait_for_tx_complete(phys_enc);
+	}
+
+	return ret;
+}
+
 static int dpu_encoder_phys_cmd_wait_for_commit_done(
 		struct dpu_encoder_phys *phys_enc)
 {
 	/* only required for master controller */
 	if (!dpu_encoder_phys_cmd_is_master(phys_enc))
 		return 0;
+
+	/*
+	 * With posted start the registers of the next commit may be written
+	 * once this frame has started its transfer: it latched its state then.
+	 */
+	if (dpu_encoder_phys_cmd_posted_start(phys_enc))
+		return _dpu_encoder_phys_cmd_wait_for_wr_ptr(phys_enc);
 
 	if (phys_enc->irq[INTR_IDX_CTL_START] &&
 	    !phys_enc->hw_ctl->ops.is_started(phys_enc->hw_ctl))
@@ -707,6 +796,13 @@ static void dpu_encoder_phys_cmd_handle_post_kickoff(
 static void dpu_encoder_phys_cmd_trigger_start(
 		struct dpu_encoder_phys *phys_enc)
 {
+	struct dpu_encoder_phys_cmd *cmd_enc =
+			to_dpu_encoder_phys_cmd(phys_enc);
+
+	/* counted before the start, the write pointer irq can follow at once */
+	if (dpu_encoder_phys_cmd_is_master(phys_enc) && phys_enc->irq[INTR_IDX_WRPTR])
+		atomic_inc(&cmd_enc->pending_wr_ptr_cnt);
+
 	dpu_encoder_helper_trigger_start(phys_enc);
 }
 
@@ -777,6 +873,7 @@ struct dpu_encoder_phys *dpu_encoder_phys_cmd_init(struct drm_device *dev,
 
 	atomic_set(&cmd_enc->pending_vblank_cnt, 0);
 	init_waitqueue_head(&cmd_enc->pending_vblank_wq);
+	atomic_set(&cmd_enc->pending_wr_ptr_cnt, 0);
 
 	DPU_DEBUG_CMDENC(cmd_enc, "created\n");
 
