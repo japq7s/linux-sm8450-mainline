@@ -98,4 +98,8 @@ void dpu_encoder_cleanup_wb_job(struct drm_encoder *drm_enc,
 bool dpu_encoder_is_valid_for_commit(struct drm_encoder *drm_enc);
 
 void dpu_encoder_start_frame_done_timer(struct drm_encoder *drm_enc);
+
+struct dpu_encoder_phys;
+void dpu_encoder_frame_still_pending(struct drm_encoder *drm_enc,
+				     struct dpu_encoder_phys *phys);
 #endif /* __DPU_ENCODER_H__ */

@@ -2149,6 +2149,27 @@ void dpu_encoder_start_frame_done_timer(struct drm_encoder *drm_enc)
 }
 
 /**
+ * dpu_encoder_frame_still_pending - Mark a physical encoder busy again after
+ *	its frame done, because a frame triggered before that done is still
+ *	queued in hardware (command mode posted start)
+ * @drm_enc: Pointer to drm encoder structure
+ * @phys: Physical encoder whose next frame is still pending
+ */
+void dpu_encoder_frame_still_pending(struct drm_encoder *drm_enc,
+				     struct dpu_encoder_phys *phys)
+{
+	struct dpu_encoder_virt *dpu_enc = to_dpu_encoder_virt(drm_enc);
+	unsigned int i;
+
+	for (i = 0; i < dpu_enc->num_phys_encs; i++)
+		if (dpu_enc->phys_encs[i] == phys &&
+		    phys->split_role != ENC_ROLE_SLAVE)
+			set_bit(i, dpu_enc->frame_busy_mask);
+
+	dpu_encoder_start_frame_done_timer(drm_enc);
+}
+
+/**
  * dpu_encoder_kickoff - trigger a double buffer flip of the ctl path
  *	(i.e. ctl flush and start) immediately.
  * @drm_enc:	encoder pointer

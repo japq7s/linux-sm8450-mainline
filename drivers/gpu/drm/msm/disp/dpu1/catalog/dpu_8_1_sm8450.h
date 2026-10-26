@@ -326,6 +326,7 @@ static const struct dpu_intf_cfg sm8450_intf[] = {
 		.intr_underrun = DPU_IRQ_IDX(MDP_SSPP_TOP0_INTR, 26),
 		.intr_vsync = DPU_IRQ_IDX(MDP_SSPP_TOP0_INTR, 27),
 		.intr_tear_rd_ptr = DPU_IRQ_IDX(MDP_INTF1_TEAR_INTR, 2),
+		.intr_tear_wr_ptr = DPU_IRQ_IDX(MDP_INTF1_TEAR_INTR, 1),
 	}, {
 		.name = "intf_2", .id = INTF_2,
 		.base = 0x36000, .len = 0x300,
@@ -335,6 +336,7 @@ static const struct dpu_intf_cfg sm8450_intf[] = {
 		.intr_underrun = DPU_IRQ_IDX(MDP_SSPP_TOP0_INTR, 28),
 		.intr_vsync = DPU_IRQ_IDX(MDP_SSPP_TOP0_INTR, 29),
 		.intr_tear_rd_ptr = DPU_IRQ_IDX(MDP_INTF2_TEAR_INTR, 2),
+		.intr_tear_wr_ptr = DPU_IRQ_IDX(MDP_INTF2_TEAR_INTR, 1),
 	}, {
 		.name = "intf_3", .id = INTF_3,
 		.base = 0x37000, .len = 0x280,
