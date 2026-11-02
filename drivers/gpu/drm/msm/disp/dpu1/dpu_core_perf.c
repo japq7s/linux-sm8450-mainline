@@ -88,7 +88,8 @@ static u64 _dpu_core_perf_calc_clk(const struct dpu_perf_cfg *perf_cfg,
 		struct drm_crtc *crtc, struct drm_crtc_state *state)
 {
 	struct drm_plane *plane;
-	struct dpu_plane_state *pstate;
+	const struct drm_plane_state *plane_state;
+	const struct dpu_plane_state *pstate;
 	struct drm_display_mode *mode;
 	u64 mode_clk;
 
@@ -96,11 +97,8 @@ static u64 _dpu_core_perf_calc_clk(const struct dpu_perf_cfg *perf_cfg,
 
 	mode_clk = (u64)mode->vtotal * mode->hdisplay * drm_mode_vrefresh(mode);
 
-	drm_atomic_crtc_for_each_plane(plane, crtc) {
-		pstate = to_dpu_plane_state(plane->state);
-		if (!pstate)
-			continue;
-
+	drm_atomic_crtc_state_for_each_plane_state(plane, plane_state, state) {
+		pstate = container_of(plane_state, const struct dpu_plane_state, base);
 		mode_clk = max(pstate->plane_clk, mode_clk);
 	}
 
@@ -136,17 +134,30 @@ static void _dpu_core_perf_calc_crtc(const struct dpu_core_perf *core_perf,
 			(u32)DIV_ROUND_UP_ULL(perf->bw_ctl, 1000));
 }
 
+/*
+ * @new_state: when checking a crtc, its new state; the other crtcs count with
+ * the state they are running with. NULL to aggregate the current states.
+ */
 static void dpu_core_perf_aggregate(struct drm_device *ddev,
 				    enum dpu_crtc_client_type curr_client_type,
+				    struct drm_crtc_state *new_state,
 				    struct dpu_core_perf_params *perf)
 {
 	struct dpu_crtc_state *dpu_cstate;
 	struct drm_crtc *tmp_crtc;
+	bool enabled;
 
 	drm_for_each_crtc(tmp_crtc, ddev) {
-		if (tmp_crtc->enabled &&
-		    curr_client_type == dpu_crtc_get_client_type(tmp_crtc)) {
+		if (new_state && tmp_crtc == new_state->crtc) {
+			enabled = new_state->enable;
+			dpu_cstate = to_dpu_crtc_state(new_state);
+		} else {
+			enabled = tmp_crtc->enabled;
 			dpu_cstate = to_dpu_crtc_state(tmp_crtc->state);
+		}
+
+		if (enabled &&
+		    curr_client_type == dpu_crtc_get_client_type(tmp_crtc)) {
 
 			perf->max_per_pipe_ib = max(perf->max_per_pipe_ib,
 						    dpu_cstate->new_perf.max_per_pipe_ib);
@@ -190,7 +201,7 @@ int dpu_core_perf_crtc_check(struct drm_crtc *crtc,
 	/* obtain new values */
 	_dpu_core_perf_calc_crtc(&kms->perf, crtc, state, &dpu_cstate->new_perf);
 
-	dpu_core_perf_aggregate(crtc->dev, dpu_crtc_get_client_type(crtc), &perf);
+	dpu_core_perf_aggregate(crtc->dev, dpu_crtc_get_client_type(crtc), state, &perf);
 
 	/* convert bandwidth to kb */
 	bw = DIV_ROUND_UP_ULL(perf.bw_ctl, 1000);
@@ -230,7 +241,7 @@ static int _dpu_core_perf_crtc_update_bus(struct dpu_kms *kms,
 		avg_bw = kms->perf.fix_core_ab_vote;
 		peak_bw = kms->perf.fix_core_ib_vote;
 	} else {
-		dpu_core_perf_aggregate(crtc->dev, dpu_crtc_get_client_type(crtc), &perf);
+		dpu_core_perf_aggregate(crtc->dev, dpu_crtc_get_client_type(crtc), NULL, &perf);
 
 		avg_bw = div_u64(perf.bw_ctl, 1000); /*Bps_to_icc*/
 		peak_bw = perf.max_per_pipe_ib;
