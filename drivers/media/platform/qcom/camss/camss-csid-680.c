@@ -393,13 +393,22 @@ static void __csid_ctrl_ipp(struct csid_device *csid, int enable)
 
 static void csid_configure_stream(struct csid_device *csid, u8 enable)
 {
+	u32 ports = csid->phy.en_vc;
 	int i;
 
 	__csid_configure_top(csid);
 
+	/*
+	 * Start only the ports whose video nodes are streaming: a linked port
+	 * without a started write master would feed a bus client nobody set
+	 * up. The others start later through csid_configure_port().
+	 */
+	if (enable && csid->active_ports)
+		ports &= csid->active_ports;
+
 	/* Loop through all enabled ports and configure a stream for each */
 	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++) {
-		if (!(csid->phy.en_vc & BIT(i)))
+		if (!(ports & BIT(i)))
 			continue;
 
 		if (csid_port_is_ipp(csid, i)) {
@@ -412,6 +421,21 @@ static void csid_configure_stream(struct csid_device *csid, u8 enable)
 			__csid_configure_rx(csid, &csid->phy, 0);
 			__csid_ctrl_rdi(csid, enable, i);
 		}
+	}
+}
+
+/* Start or stop one port of a CSID whose receiver is already running */
+static void csid_configure_port(struct csid_device *csid, u8 port, u8 enable)
+{
+	if (port >= MSM_CSID_MAX_SRC_STREAMS || !(csid->phy.en_vc & BIT(port)))
+		return;
+
+	if (csid_port_is_ipp(csid, port)) {
+		__csid_configure_ipp_stream(csid, enable, port, 0);
+		__csid_ctrl_ipp(csid, enable);
+	} else {
+		__csid_configure_rdi_stream(csid, enable, port, 0);
+		__csid_ctrl_rdi(csid, enable, port);
 	}
 }
 
@@ -563,4 +587,5 @@ const struct csid_hw_ops csid_ops_680 = {
 	.src_pad_code = csid_src_pad_code,
 	.subdev_init = csid_subdev_init,
 	.reg_update = csid_subdev_reg_update,
+	.configure_port = csid_configure_port,
 };

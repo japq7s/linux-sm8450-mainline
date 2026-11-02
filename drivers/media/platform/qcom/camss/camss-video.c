@@ -250,6 +250,20 @@ static int video_prepare_streaming(struct vb2_queue *q)
 	return ret;
 }
 
+/*
+ * Several video nodes can stream through one CSID at a time (e.g. the image
+ * and a PDAF stream of the same sensor on different data types). The first
+ * one starts the CSID and everything upstream of it, the last one stops them;
+ * the others only start or stop their own CSID port.
+ */
+static struct csid_device *video_entity_csid(struct media_entity *entity)
+{
+	if (!msm_csid_is_entity(entity))
+		return NULL;
+
+	return v4l2_get_subdevdata(media_entity_to_v4l2_subdev(entity));
+}
+
 static int video_start_streaming(struct vb2_queue *q, unsigned int count)
 {
 	struct camss_video *video = vb2_get_drv_priv(q);
@@ -257,6 +271,7 @@ static int video_start_streaming(struct vb2_queue *q, unsigned int count)
 	struct media_entity *entity;
 	struct media_pad *pad;
 	struct v4l2_subdev *subdev;
+	struct csid_device *csid;
 	int ret;
 
 	ret = video_device_pipeline_alloc_start(vdev);
@@ -282,9 +297,17 @@ static int video_start_streaming(struct vb2_queue *q, unsigned int count)
 		entity = pad->entity;
 		subdev = media_entity_to_v4l2_subdev(entity);
 
+		/* the CSID and the subdevs upstream of it already stream */
+		csid = video_entity_csid(entity);
+		if (csid && msm_csid_stream_get(csid, pad->index))
+			break;
+
 		ret = v4l2_subdev_call(subdev, video, s_stream, 1);
-		if (ret < 0 && ret != -ENOIOCTLCMD)
+		if (ret < 0 && ret != -ENOIOCTLCMD) {
+			if (csid)
+				msm_csid_stream_put(csid, pad->index);
 			goto stop_subdevs;
+		}
 	}
 
 	return 0;
@@ -298,6 +321,10 @@ stop_subdevs:
 			break;
 
 		entity = pad->entity;
+		csid = video_entity_csid(entity);
+		if (csid && msm_csid_stream_put(csid, pad->index))
+			break;
+
 		v4l2_subdev_call(media_entity_to_v4l2_subdev(entity), video,
 				 s_stream, 0);
 	}
@@ -317,6 +344,7 @@ static void video_stop_streaming(struct vb2_queue *q)
 	struct media_entity *entity;
 	struct media_pad *pad;
 	struct v4l2_subdev *subdev;
+	struct csid_device *csid;
 	int ret;
 
 	entity = &vdev->entity;
@@ -331,6 +359,11 @@ static void video_stop_streaming(struct vb2_queue *q)
 
 		entity = pad->entity;
 		subdev = media_entity_to_v4l2_subdev(entity);
+
+		/* other video nodes still stream through this CSID */
+		csid = video_entity_csid(entity);
+		if (csid && msm_csid_stream_put(csid, pad->index))
+			break;
 
 		ret = v4l2_subdev_call(subdev, video, s_stream, 0);
 
