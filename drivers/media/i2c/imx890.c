@@ -23,6 +23,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
 
+#include <media/mipi-csi2.h>
 #include <media/v4l2-cci.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-fwnode.h>
@@ -85,6 +86,13 @@ struct imx890_mode {
 	u32 fll;
 	u32 llp;
 	u64 pixel_rate;
+	/*
+	 * Lines of phase detection data the mode sends on CSI-2 DT 0x30 next
+	 * to the image (same width, 10 bit), 0 if none. Measured with the
+	 * CSID packet counter: one quarter of the image height in the 2x2
+	 * binned modes, none in the 4x4 binned one.
+	 */
+	u32 pd_height;
 	const struct cci_reg_sequence *regs;
 	unsigned int num_regs;
 };
@@ -1276,6 +1284,7 @@ static const struct imx890_mode imx890_modes[] = {
 		.fll = 3310,
 		.llp = 15616,
 		.pixel_rate = 1551360000,
+		.pd_height = 768,
 		.regs = imx890_4096x3072_regs,
 		.num_regs = ARRAY_SIZE(imx890_4096x3072_regs),
 	},
@@ -1286,6 +1295,7 @@ static const struct imx890_mode imx890_modes[] = {
 		.fll = 3168,
 		.llp = 15616,
 		.pixel_rate = 1484800000,
+		.pd_height = 576,
 		.regs = imx890_4096x2304_regs,
 		.num_regs = ARRAY_SIZE(imx890_4096x2304_regs),
 	},
@@ -1667,6 +1677,45 @@ static int imx890_init_state(struct v4l2_subdev *sd,
 	return 0;
 }
 
+/*
+ * The 2x2 binned modes send phase detection data on a second data type of
+ * the same virtual channel, after the image lines of each frame.
+ */
+static int imx890_get_frame_desc(struct v4l2_subdev *sd, unsigned int pad,
+				 struct v4l2_mbus_frame_desc *fd)
+{
+	struct imx890 *imx890 = to_imx890(sd);
+	struct v4l2_subdev_state *state;
+	u32 pd_height;
+
+	if (pad)
+		return -EINVAL;
+
+	/* imx890->mode changes in set_fmt under the active state lock */
+	state = v4l2_subdev_lock_and_get_active_state(sd);
+	pd_height = imx890->mode->pd_height;
+	v4l2_subdev_unlock_state(state);
+
+	memset(fd, 0, sizeof(*fd));
+	fd->type = V4L2_MBUS_FRAME_DESC_TYPE_CSI2;
+
+	fd->entry[0].stream = 0;
+	fd->entry[0].pixelcode = MEDIA_BUS_FMT_SRGGB10_1X10;
+	fd->entry[0].bus.csi2.vc = 0;
+	fd->entry[0].bus.csi2.dt = MIPI_CSI2_DT_RAW10;
+	fd->num_entries = 1;
+
+	if (pd_height) {
+		fd->entry[1].stream = 1;
+		fd->entry[1].pixelcode = MEDIA_BUS_FMT_META_10;
+		fd->entry[1].bus.csi2.vc = 0;
+		fd->entry[1].bus.csi2.dt = MIPI_CSI2_DT_USER_DEFINED(0);
+		fd->num_entries = 2;
+	}
+
+	return 0;
+}
+
 static const struct v4l2_subdev_video_ops imx890_video_ops = {
 	.s_stream = v4l2_subdev_s_stream_helper,
 };
@@ -1677,6 +1726,7 @@ static const struct v4l2_subdev_pad_ops imx890_pad_ops = {
 	.get_fmt = v4l2_subdev_get_fmt,
 	.set_fmt = imx890_set_format,
 	.get_selection = imx890_get_selection,
+	.get_frame_desc = imx890_get_frame_desc,
 	.enable_streams = imx890_enable_streams,
 	.disable_streams = imx890_disable_streams,
 };
