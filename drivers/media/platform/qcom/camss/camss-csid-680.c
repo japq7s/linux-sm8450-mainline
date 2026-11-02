@@ -287,7 +287,7 @@ static void __csid_configure_rdi_stream(struct csid_device *csid, u8 enable, u8 
 								   csid->res->formats->nformats,
 								   input_format->code);
 	u8 lane_cnt = csid->phy.lane_cnt;
-	u8 dt_id;
+	u8 dt_id, dt;
 	u32 val;
 
 	if (!lane_cnt)
@@ -310,9 +310,13 @@ static void __csid_configure_rdi_stream(struct csid_device *csid, u8 enable, u8 
 	 */
 	dt_id = port & 0x03;
 
+	dt = format->data_type;
+	if (input_format->code == MEDIA_BUS_FMT_META_10)
+		csid_get_meta_dt_vc(csid, input_format->code, &dt, &vc);
+
 	/* note: for non-RDI path, this should be format->decode_format */
 	val |= DECODE_FORMAT_PAYLOAD_ONLY << RDI_CFG0_DECODE_FORMAT;
-	val |= format->data_type << RDI_CFG0_DATA_TYPE;
+	val |= dt << RDI_CFG0_DATA_TYPE;
 	val |= vc << RDI_CFG0_VIRTUAL_CHANNEL;
 	val |= dt_id << RDI_CFG0_DT_ID;
 	writel(val, csid->base + CSID_RDI_CFG0(port));

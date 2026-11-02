@@ -480,6 +480,19 @@ static const struct csid_format_info formats_gen2[] = {
 		14,
 		1,
 	},
+	{
+		/*
+		 * Sensor data on a second data type, e.g. phase detection
+		 * pixels. The data type and virtual channel come from the
+		 * sensor's frame descriptor (csid_get_meta_dt_vc()); this one
+		 * is the fallback.
+		 */
+		MEDIA_BUS_FMT_META_10,
+		MIPI_CSI2_DT_USER_DEFINED(0),
+		DECODE_FORMAT_UNCOMPRESSED_10_BIT,
+		10,
+		1,
+	},
 };
 
 const struct csid_formats csid_formats_4_1 = {
@@ -1208,6 +1221,39 @@ void msm_csid_get_csid_id(struct media_entity *entity, u8 *id)
 	struct csid_device *csid = v4l2_get_subdevdata(sd);
 
 	*id = csid->id;
+}
+
+/*
+ * csid_get_meta_dt_vc - Find the CSI-2 data type and virtual channel of a
+ * metadata format in the frame descriptor of the sensor feeding the CSID
+ * @csid: CSID device
+ * @code: media bus code set on the CSID source pad
+ * @dt: data type, left unchanged if the sensor does not describe @code
+ * @vc: virtual channel, left unchanged if the sensor does not describe @code
+ */
+void csid_get_meta_dt_vc(struct csid_device *csid, u32 code, u8 *dt, u8 *vc)
+{
+	struct v4l2_mbus_frame_desc fd = {};
+	struct media_pad *sensor_pad;
+	unsigned int i;
+
+	sensor_pad = camss_find_sensor_pad(&csid->subdev.entity);
+	if (!sensor_pad)
+		return;
+
+	if (v4l2_subdev_call(media_entity_to_v4l2_subdev(sensor_pad->entity),
+			     pad, get_frame_desc, sensor_pad->index, &fd) ||
+	    fd.type != V4L2_MBUS_FRAME_DESC_TYPE_CSI2)
+		return;
+
+	for (i = 0; i < fd.num_entries; i++) {
+		if (fd.entry[i].pixelcode != code)
+			continue;
+
+		*dt = fd.entry[i].bus.csi2.dt;
+		*vc = fd.entry[i].bus.csi2.vc;
+		return;
+	}
 }
 
 static const struct media_entity_operations csid_media_ops;
