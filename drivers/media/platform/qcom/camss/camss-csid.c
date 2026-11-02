@@ -1099,6 +1099,7 @@ int msm_csid_subdev_init(struct camss *camss, struct csid_device *csid,
 	csid->camss = camss;
 	csid->id = id;
 	csid->res = &res->csid;
+	mutex_init(&csid->stream_lock);
 
 	if (dev_WARN_ONCE(dev, !csid->res->parent_dev_ops,
 			  "Error: CSID depends on VFE/IFE device ops!\n")) {
@@ -1207,6 +1208,72 @@ void msm_csid_get_csid_id(struct media_entity *entity, u8 *id)
 	struct csid_device *csid = v4l2_get_subdevdata(sd);
 
 	*id = csid->id;
+}
+
+static const struct media_entity_operations csid_media_ops;
+
+bool msm_csid_is_entity(struct media_entity *entity)
+{
+	return entity->ops == &csid_media_ops;
+}
+
+/*
+ * msm_csid_stream_get - Account a video node starting through @src_pad
+ * @csid: CSID device
+ * @src_pad: CSID source pad the video node's line is linked to
+ *
+ * The first user starts the CSID (and everything upstream of it) the usual
+ * way, with s_stream. Later users only start their own port: the receiver,
+ * the CSIPHY and the sensor are already streaming.
+ *
+ * Return true if the CSID was already streaming and the caller must not
+ * call s_stream on it or on the subdevs upstream of it.
+ */
+bool msm_csid_stream_get(struct csid_device *csid, unsigned int src_pad)
+{
+	u8 port = src_pad - MSM_CSID_PAD_FIRST_SRC;
+	bool shared = false;
+
+	if (!csid->res->hw_ops->configure_port)
+		return false;
+
+	mutex_lock(&csid->stream_lock);
+	csid->active_ports |= BIT(port);
+	if (csid->stream_count++) {
+		csid->res->hw_ops->configure_port(csid, port, 1);
+		shared = true;
+	}
+	mutex_unlock(&csid->stream_lock);
+
+	return shared;
+}
+
+/*
+ * msm_csid_stream_put - Account a video node stopping through @src_pad
+ * @csid: CSID device
+ * @src_pad: CSID source pad the video node's line is linked to
+ *
+ * Return true if other video nodes still stream through the CSID: only the
+ * port was stopped and the caller must not call s_stream on the CSID or on
+ * the subdevs upstream of it.
+ */
+bool msm_csid_stream_put(struct csid_device *csid, unsigned int src_pad)
+{
+	u8 port = src_pad - MSM_CSID_PAD_FIRST_SRC;
+	bool shared = false;
+
+	if (!csid->res->hw_ops->configure_port)
+		return false;
+
+	mutex_lock(&csid->stream_lock);
+	csid->active_ports &= ~BIT(port);
+	if (!WARN_ON(!csid->stream_count) && --csid->stream_count) {
+		csid->res->hw_ops->configure_port(csid, port, 0);
+		shared = true;
+	}
+	mutex_unlock(&csid->stream_lock);
+
+	return shared;
 }
 
 /*
