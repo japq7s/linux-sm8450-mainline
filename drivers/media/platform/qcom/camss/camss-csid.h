@@ -228,6 +228,8 @@ void msm_csid_unregister_entity(struct csid_device *csid);
 
 void msm_csid_get_csid_id(struct media_entity *entity, u8 *id);
 
+void csid_get_meta_dt_vc(struct csid_device *csid, u32 code, u8 *dt, u8 *vc);
+
 bool msm_csid_is_entity(struct media_entity *entity);
 bool msm_csid_stream_get(struct csid_device *csid, unsigned int src_pad);
 bool msm_csid_stream_put(struct csid_device *csid, unsigned int src_pad);
