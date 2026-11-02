@@ -247,7 +247,7 @@ static void vfe_wm_start(struct vfe_device *vfe, u8 wm, struct vfe_line *line)
 	writel_relaxed(val, vfe->base + VFE_BUS_WM_CFG(wm));
 }
 
-static void vfe_wm_stop(struct vfe_device *vfe, u8 wm)
+static void vfe_wm_stop(struct vfe_device *vfe, u8 wm, struct vfe_line *line)
 {
 	/* Disable WM */
 	writel_relaxed(0, vfe->base + VFE_BUS_WM_CFG(wm));
@@ -257,7 +257,7 @@ static void vfe_wm_update(struct vfe_device *vfe, u8 wm, u32 addr,
 			  struct vfe_line *line)
 {
 	struct v4l2_pix_format_mplane *pix =
-		&line->video_out.active_fmt.fmt.pix_mp;
+		&line->output[0].video_out.active_fmt.fmt.pix_mp;
 	u32 stride = pix->plane_fmt[0].bytesperline;
 
 	writel_relaxed(addr, vfe->base + VFE_BUS_WM_IMAGE_ADDR(wm));
@@ -450,7 +450,7 @@ static void vfe_isr_reg_update(struct vfe_device *vfe, enum vfe_line_id line_id)
 	spin_lock_irqsave(&vfe->output_lock, flags);
 	vfe->res->hw_ops->reg_update_clear(vfe, line_id);
 
-	output = &vfe->line[line_id].output;
+	output = &vfe->line[line_id].output[0];
 
 	if (output->wait_reg_update) {
 		output->wait_reg_update = 0;
@@ -481,7 +481,7 @@ static void vfe_isr_wm_done(struct vfe_device *vfe, u8 wm)
 				    "Received wm done for unmapped index\n");
 		goto out_unlock;
 	}
-	output = &vfe->line[vfe->wm_output_map[wm]].output;
+	output = &vfe->line[vfe->wm_output_map[wm]].output[0];
 
 	ready_buf = output->buf[0];
 	if (!ready_buf) {
@@ -501,7 +501,7 @@ static void vfe_isr_wm_done(struct vfe_device *vfe, u8 wm)
 	output->buf[index] = vfe_buf_get_pending(output);
 
 	if (output->buf[index])
-		vfe_wm_update(vfe, output->wm_idx[0], output->buf[index]->addr[0], line);
+		vfe_wm_update(vfe, output->wm[0].bus_client, output->buf[index]->addr[0], line);
 	else
 		output->gen2.active_num--;
 
