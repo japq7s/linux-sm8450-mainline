@@ -137,6 +137,12 @@ iris_m2m_queue_init(void *priv, struct vb2_queue *src_vq, struct vb2_queue *dst_
 	dst_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
 	dst_vq->ops = inst->core->iris_vb2_ops;
 	dst_vq->mem_ops = &vb2_dma_contig_memops;
+	/*
+	 * Let userspace ask for cached CAPTURE buffers: coherent ones are
+	 * mapped uncached on a non-coherent device, and software reading
+	 * decoded frames from them runs a hundred times slower.
+	 */
+	dst_vq->allow_cache_hints = 1;
 	dst_vq->drv_priv = inst;
 	dst_vq->buf_struct_size = sizeof(struct iris_buffer);
 	dst_vq->min_reqbufs_allocation = MIN_BUFFERS;
