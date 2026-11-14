@@ -1261,6 +1261,16 @@
 	};
 };
 
+/*
+ * Nothing uses the crypto engine: its driver is marked broken (it races
+ * the secure world for the hardware and is slower than the CPU). Left
+ * enabled without a driver, it keeps the interconnect providers waiting
+ * for their sync_state().
+ */
+&crypto {
+	status = "disabled";
+};
+
 &gpi_dma0 {
 	status = "okay";
 };
