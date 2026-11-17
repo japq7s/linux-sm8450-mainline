@@ -948,6 +948,8 @@ struct haptics_chip {
 	struct haptics_mmap		mmap;
 	const struct fifo_hw_info	*fifo_info;
 	struct delayed_work		stop_work;
+	u32				direct_play_ms;
+	bool				direct_playing;
 	struct regulator_dev		*swr_slave_rdev;
 	struct nvmem_cell		*cl_brake_nvmem;
 	struct nvmem_device		*hap_cfg_nvmem;
@@ -3736,13 +3738,27 @@ static void haptics_stop_constant_effect_play(struct work_struct *work)
 	struct haptics_chip *chip = container_of(work, struct haptics_chip, stop_work.work);
 	int rc = 0;
 
-	rc = haptics_enable_play(chip, false);
-	if (rc < 0)
-		dev_err(chip->dev, "stop constant effect play failed\n");
+	if (xchg(&chip->direct_playing, false)) {
+		rc = haptics_enable_play(chip, false);
+		if (rc < 0)
+			dev_err(chip->dev, "stop constant effect play failed\n");
+	}
 
 	rc = haptics_enable_hpwr_vreg(chip, false);
 	if (rc < 0)
 		dev_err(chip->dev, "disable hpwr_vreg failed\n");
+}
+
+/*
+ * A direct mode effect (FF_CONSTANT, or FF_PERIODIC without a custom
+ * waveform) plays from playback(1) until its replay length has passed or
+ * until playback(0), whichever comes first. Uploading the next one stops
+ * the one playing.
+ */
+static void haptics_stop_direct_play(struct haptics_chip *chip)
+{
+	cancel_delayed_work_sync(&chip->stop_work);
+	haptics_stop_constant_effect_play(&chip->stop_work.work);
 }
 
 static inline bool is_haptics_runtime_pm_enabled(struct haptics_chip *chip)
@@ -3854,7 +3870,8 @@ static int haptics_upload_effect(struct input_dev *dev,
 		amplitude = tmp / 0x7fff;
 		dev_dbg(chip->dev, "upload constant effect, length = %dms, amplitude = %#x\n",
 				length_ms, amplitude);
-		schedule_delayed_work(&chip->stop_work, msecs_to_jiffies(length_ms));
+		haptics_stop_direct_play(chip);
+		chip->direct_play_ms = length_ms;
 		haptics_load_constant_effect(chip, amplitude);
 		if (rc < 0) {
 			dev_err(chip->dev, "set direct play failed, rc=%d\n",
@@ -3874,8 +3891,8 @@ static int haptics_upload_effect(struct input_dev *dev,
 			tmp = get_direct_play_max_amplitude(chip);
 			tmp *= abs(effect->u.periodic.magnitude);
 			amplitude = tmp / 0x7fff;
-			schedule_delayed_work(&chip->stop_work,
-					      msecs_to_jiffies(length_ms));
+			haptics_stop_direct_play(chip);
+			chip->direct_play_ms = length_ms;
 			haptics_load_constant_effect(chip, amplitude);
 			break;
 		}
@@ -3946,14 +3963,29 @@ auto_suspend:
 static int haptics_playback(struct input_dev *dev, int effect_id, int val)
 {
 	struct haptics_chip *chip = input_get_drvdata(dev);
+	int rc;
 
 	dev_dbg(chip->dev, "playback val = %d\n", val);
 	if (!!val) {
 		if (chip->config.measure_lra_impedance && chip->visense_enabled)
 			chip->pattern_start_time = ktime_get_boottime();
 
-		return haptics_enable_play(chip, true);
+		rc = haptics_enable_play(chip, true);
+		if (rc == 0 && chip->play.pattern_src == DIRECT_PLAY) {
+			WRITE_ONCE(chip->direct_playing, true);
+			mod_delayed_work(system_percpu_wq, &chip->stop_work,
+					 msecs_to_jiffies(chip->direct_play_ms));
+		}
+
+		return rc;
 	}
+
+	/*
+	 * The input core calls this under its event lock: stop a direct mode
+	 * effect from the worker, which may sleep for the brake.
+	 */
+	if (chip->play.pattern_src == DIRECT_PLAY)
+		mod_delayed_work(system_percpu_wq, &chip->stop_work, 0);
 
 	return 0;
 }
@@ -4086,6 +4118,7 @@ static int haptics_erase(struct input_dev *dev, int effect_id)
 
 restore:
 	play->pattern_src = SRC_INVALID;
+	WRITE_ONCE(chip->direct_playing, false);
 	mutex_unlock(&play->lock);
 	/* Restore Vmax headroom to 1.5V after SPMI play is done */
 	if (chip->wa_flags & RESTORE_VMAX_HDRM_1P5V) {
